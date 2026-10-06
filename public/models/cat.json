@@ -1,0 +1,22 @@
+{
+  "file": "cat.glb",
+  "clips": {
+    "run": "Run",
+    "jump": "Jump"
+  },
+  "length": 1.75,
+  "rotationY": -1.5707963,
+  "tint": {
+    "materials": [
+      "SomaliTexture"
+    ],
+    "color": "#44444e"
+  },
+  "emissive": 0,
+  "sheen": 0.9,
+  "sheenColor": "#7a7f99",
+  "credits": [
+    "Cat: <a href=\"https://sketchfab.com/3d-models/somali-cat-animated-ver-12-e185c3fd92b64c32b4515a32b29252fc\" target=\"_blank\" rel=\"noopener\">Somali Cat Animated ver 1.2</a> by DreamNoms, <a href=\"https://creativecommons.org/licenses/by/4.0/\" target=\"_blank\" rel=\"noopener\">CC BY 4.0</a>. Changes: tinted black, run and jump animations added, optimized."
+  ],
+  "offsetX": 0.22
+}

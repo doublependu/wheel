@@ -1,0 +1,22 @@
+{
+  "name": "wheel",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node tools/check-budget.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "deploy": "node tools/predeploy.mjs && npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.5",
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.147.0"
+  }
+}

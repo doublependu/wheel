@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#0b0b12" />
+    <meta name="description" content="A one-button cat runner that evolves from 1-bit pixels and beeps to HDR 3D and spatial sound." />
+    <title>Wheel</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23111'/%3E%3Cpath d='M16 16L16 1A15 15 0 0 1 29 8.5Z' fill='%23ff3b30'/%3E%3Cpath d='M16 16L29 8.5A15 15 0 0 1 29 23.5Z' fill='%23ffcc00'/%3E%3Cpath d='M16 16L29 23.5A15 15 0 0 1 16 31Z' fill='%2334c759'/%3E%3Cpath d='M16 16L16 31A15 15 0 0 1 3 23.5Z' fill='%23007aff'/%3E%3Cpath d='M16 16L3 23.5A15 15 0 0 1 3 8.5Z' fill='%235856d6'/%3E%3Cpath d='M16 16L3 8.5A15 15 0 0 1 16 1Z' fill='%23ff2d55'/%3E%3C/svg%3E" />
+    <style>
+      :root {
+        --fg: #f2f2f2;
+        --fg-dim: rgba(242, 242, 242, 0.55);
+        --bg: #0b0b12;
+        --font: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+        --safe-t: env(safe-area-inset-top, 0px);
+        --safe-r: env(safe-area-inset-right, 0px);
+        --safe-b: env(safe-area-inset-bottom, 0px);
+        --safe-l: env(safe-area-inset-left, 0px);
+        color-scheme: dark;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: var(--font); }
+      body {
+        touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent; overscroll-behavior: none;
+      }
+      body.screen-title { background: radial-gradient(120% 90% at 50% 40%, #232336 0%, #0b0b12 60%, #050508 100%); }
+      #stage, #stage canvas { position: fixed; inset: 0; width: 100vw; height: 100dvh; display: block; }
+      #c2d, #c3d { opacity: 0; transition: opacity .25s; }
+      body.show-2d #c2d, body.show-3d #c3d { opacity: 1; }
+      body.show-3d.show-2d #c2d { opacity: 1; }
+
+      /* The CSS wheel: visible at first paint, upgraded to three.js when it loads. */
+      #wheel { position: fixed; left: 50%; top: 42%; width: min(58vmin, 540px); aspect-ratio: 1; translate: -50% -50%;
+        border-radius: 50%; box-shadow: 0 4vmin 9vmin rgba(0, 0, 0, .6); transition: opacity .6s, scale .6s; pointer-events: none; }
+      #wheel .disc { position: absolute; inset: 0; border-radius: 50%; animation: spin 1.15s linear infinite;
+        background: conic-gradient(from 0deg, #ff3b30, #ff9500, #ffcc00, #34c759, #00c7be, #007aff, #5856d6, #af52de, #ff2d55, #ff3b30); }
+      #wheel .disc::after { content: ''; position: absolute; inset: 0; border-radius: 50%;
+        background: repeating-conic-gradient(from 0deg, rgba(255,255,255,.18) 0 2deg, transparent 2deg 36deg); }
+      #wheel::after { content: ''; position: absolute; inset: 0; border-radius: 50%;
+        background: radial-gradient(circle at 34% 28%, rgba(255,255,255,.85), rgba(255,255,255,0) 34%),
+          radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 58%, rgba(0,0,0,.45) 100%);
+        box-shadow: inset 0 0 0 .6vmin rgba(255,255,255,.18); }
+      body.wheel-3d #wheel, body:not(.screen-title) #wheel { opacity: 0; scale: .9; }
+      @keyframes spin { to { rotate: 1turn; } }
+      @media (prefers-reduced-motion: reduce) { #wheel .disc { animation-duration: 6s; } }
+
+      /* Screens */
+      #overlay { position: fixed; inset: 0; display: grid; place-items: end center; pointer-events: none; text-align: center;
+        padding: 0 16px calc(12vh + var(--safe-b)); }
+      #overlay .box { display: grid; gap: .6em; }
+      #title { margin: 0; font-size: clamp(28px, 7vmin, 64px); letter-spacing: .35em; font-weight: 800; padding-left: .35em;
+        text-shadow: 0 2px 20px rgba(0,0,0,.6); }
+      #subtitle { margin: 0; font-size: clamp(11px, 2.2vmin, 15px); color: var(--fg-dim); letter-spacing: .08em; }
+      #prompt { margin: .4em 0 0; font-size: clamp(13px, 2.8vmin, 20px); letter-spacing: .12em; text-transform: uppercase; }
+      body.ready #prompt { animation: blink 1.4s steps(2, jump-none) infinite; }
+      @keyframes blink { 50% { opacity: .35; } }
+      #result { margin: 0; font-size: clamp(13px, 2.6vmin, 18px); color: var(--fg-dim); white-space: pre-line; }
+      body.screen-run #overlay { display: none; }
+      body.crunch #overlay, body.crunch #fork { opacity: 0; transition: opacity .3s; }
+      body.screen-over #overlay, body.screen-paused #overlay { place-items: center; padding-bottom: 0; }
+      body.screen-over #overlay .box, body.screen-paused #overlay .box { background: rgba(8,8,14,.78); color: #f2f2f2; padding: 1.4em 2em;
+        border-radius: 10px; --fg-dim: rgba(242,242,242,.7); }
+      body:not(.screen-title) #subtitle, body.screen-title #result { display: none; }
+
+      /* HUD */
+      .hud { position: fixed; z-index: 2; font-size: clamp(12px, 2.6vmin, 20px); letter-spacing: .1em; color: var(--fg); }
+      #score { top: calc(12px + var(--safe-t)); right: calc(16px + var(--safe-r)); text-align: right; white-space: pre; }
+      #score .hi { color: var(--fg-dim); margin-right: 1.2em; }
+      body.screen-title #score { display: none; }
+      #version { bottom: calc(8px + var(--safe-b)); right: calc(12px + var(--safe-r)); font-size: 11px; color: var(--fg-dim);
+        opacity: .7; pointer-events: none; letter-spacing: .05em; }
+      #buttons { top: calc(10px + var(--safe-t)); left: calc(12px + var(--safe-l)); display: flex; gap: 8px; }
+      #buttons button, #credits-btn { font: inherit; color: var(--fg); background: rgba(127,127,127,.18); border: 1px solid rgba(127,127,127,.35);
+        border-radius: 8px; min-width: 40px; height: 40px; padding: 0 10px; cursor: pointer; }
+      #pause-btn { display: none; }
+      body.screen-run #pause-btn { display: block; }
+      body:not(.screen-run) #buttons { left: auto; right: calc(12px + var(--safe-r)); top: auto; bottom: calc(30px + var(--safe-b)); }
+      #credits-btn { bottom: calc(10px + var(--safe-b)); left: calc(12px + var(--safe-l)); font-size: 12px; height: 32px; }
+      body.screen-run #credits-btn { display: none; }
+
+      /* Fork me ribbon (title, pause and game over) */
+      #fork { position: fixed; z-index: 3; top: calc(36px + var(--safe-t)); left: calc(-56px + var(--safe-l)); width: 230px; rotate: -45deg; text-align: center;
+        background: #c62828; color: #fff; font: 700 12px/2.2 var(--font); letter-spacing: .06em; text-decoration: none;
+        box-shadow: 0 2px 8px rgba(0,0,0,.45); border-block: 1px dashed rgba(255,255,255,.55); }
+      body.screen-run #fork { display: none; }
+
+      #credits { position: fixed; inset: 0; z-index: 4; display: grid; place-items: center; background: rgba(0,0,0,.7); padding: 16px; }
+      #credits[hidden] { display: none; }
+      #credits .box { max-width: 560px; background: #15151f; border-radius: 10px; padding: 1.2em 1.6em; font-size: 13px; line-height: 1.6; }
+      #credits a { color: #7fc8ff; }
+
+      /* Era looks for the HUD */
+      body.era-1 { --fg: #0d0d0d; --fg-dim: rgba(13,13,13,.55); }
+      body.era-2 { --fg: #ffffff; --fg-dim: #55ffff; }
+      body.era-3 { --fg: #d7d7d7; --fg-dim: #d7d700; }
+      body.era-4 { --fg: #fff2c0; --fg-dim: #ffd27a; }
+      body.era-5, body.era-6, body.era-7 { --fg: #ffffff; --fg-dim: rgba(255,255,255,.65); }
+      body.era-1 #score, body.era-2 #score, body.era-3 #score, body.era-4 #score { font-weight: 700; }
+      body.screen-title { --fg: #f2f2f2; --fg-dim: rgba(242,242,242,.55); }
+    </style>
+  </head>
+  <body class="screen-title">
+    <div id="stage">
+      <canvas id="c3d"></canvas>
+      <canvas id="c2d"></canvas>
+    </div>
+    <div id="wheel" aria-hidden="true"><div class="disc"></div></div>
+    <div id="overlay">
+      <div class="box">
+        <h1 id="title">WHEEL</h1>
+        <p id="subtitle">a cat runs through graphics history</p>
+        <p id="result"></p>
+        <p id="prompt">Loading…</p>
+      </div>
+    </div>
+    <div id="score" class="hud" aria-live="off"></div>
+    <div id="buttons" class="hud">
+      <button id="pause-btn" type="button" aria-label="Pause">II</button>
+      <button id="mute-btn" type="button" aria-label="Mute sound">♪</button>
+    </div>
+    <button id="credits-btn" class="hud" type="button">Credits</button>
+    <a id="fork" href="https://github.com/doublependu/wheel" target="_blank" rel="noopener">Fork me on GitHub</a>
+    <div id="version" class="hud">%APP_VERSION%</div>
+    <div id="credits" hidden>
+      <div class="box">
+        <h2>Credits</h2>
+        <p>Pixel art, 3D scenery, music and sound are generated in code — no samples or textures to download.</p>
+        <p>3D: <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> (MIT).</p>
+        <div id="credits-list"></div>
+        <p>Code and game design: <a href="https://github.com/doublependu/wheel" target="_blank" rel="noopener">github.com/doublependu/wheel</a> (GPL-3.0).</p>
+        <p><button type="button" id="credits-close">Close</button></p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
