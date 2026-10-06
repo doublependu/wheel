@@ -17,6 +17,8 @@ As you run, the graphics become better and better
 1. from pixelated to smooth 3D rendering
     - need an animated pixel art to start with
     - need a 3D model at the end
+        - use blender tools through blender MCP
+        - use a free, rigged and animated model from sketchfab if you can find one
 2. from black and white, to 4 color, 8 color, 256 color, true color, HDR color (if the browser allows it)
 3. Think of a few transitions to go through
 
