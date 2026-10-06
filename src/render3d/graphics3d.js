@@ -4,8 +4,24 @@ import * as THREE from 'three/webgpu';
 import { TIERS, initialTier, Benchmark, DynamicResolution } from './quality.js';
 import { Wheel } from './wheel.js';
 
-export async function createGraphics3D({ canvas, view, dpr, params }) {
+// A WebGPU adapter worth using: Chrome on Linux without Vulkan hands out SwiftShader (the CPU),
+// which is far slower than WebGL2 on the real GPU.
+async function hardwareWebGPU() {
+  if (!navigator.gpu) return false;
+  try {
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) return false;
+    const info = adapter.info ?? {};
+    if (adapter.isFallbackAdapter || info.isFallbackAdapter) return false;
+    return !/swiftshader|llvmpipe|lavapipe|software/i.test(`${info.vendor} ${info.architecture} ${info.device} ${info.description}`);
+  } catch {
+    return false;
+  }
+}
+
+export async function createGraphics3D({ canvas, view, dpr, params, forceWebGL = false }) {
   const g = new Graphics3D(canvas, params);
+  g.forceWebGL = forceWebGL;
   await g.init(view, dpr);
   return g;
 }
@@ -22,16 +38,26 @@ class Graphics3D {
   }
 
   async init(view, dpr) {
-    const wantHdr = matchMedia('(dynamic-range: high)').matches && !!navigator.gpu && this.params.get('hdr') !== '0';
+    const webgpu = !this.forceWebGL && this.params.get('webgl') !== '1' && (await hardwareWebGPU());
+    const wantHdr = matchMedia('(dynamic-range: high)').matches && webgpu && this.params.get('hdr') !== '0';
     const renderer = new THREE.WebGPURenderer({
       canvas: this.canvas,
       antialias: false,
       powerPreference: 'high-performance',
       outputType: wantHdr ? THREE.HalfFloatType : undefined,
-      forceWebGL: this.params.get('webgl') === '1',
+      forceWebGL: !webgpu,
     });
     await renderer.init();
     this.renderer = renderer;
+    // A lost WebGPU device (e.g. a hybrid-GPU laptop whose discrete GPU can't share frames with the
+    // display GPU) is reported once; main.js then rebuilds the 3D view on WebGL2.
+    this.onLost = null;
+    this.lost = null;
+    renderer.backend.device?.lost.then((info) => {
+      if (info.reason === 'destroyed') return;
+      this.lost = info;
+      this.onLost?.(info);
+    });
     this.hdr = wantHdr && renderer.backend.isWebGPUBackend;
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -40,13 +66,22 @@ class Graphics3D {
     const { tier, forced } = initialTier(renderer, this.params);
     this.tier = tier;
     this.tierForced = forced;
-    this.tierSettings = TIERS[tier];
+    this.tierSettings = this.#withFx(TIERS[tier]);
     this.bench = forced ? null : new Benchmark();
     this.drs = new DynamicResolution(0.5, 1);
     this.dpr = dpr;
     this.resize(view, dpr);
     this.wheel = new Wheel(this);
     this.wheel.resize(view.cssW, view.cssH);
+  }
+
+  // ?fx=nodof,nomb,notraa,noao,nogodrays switches single effects off on any tier (debugging).
+  #withFx(t) {
+    const off = (this.params.get('fx') ?? '').split(',');
+    const map = { nodof: 'dof', nomb: 'motionBlur', notraa: 'traa', noao: 'ao', nogodrays: 'godrays' };
+    const o = { ...t };
+    for (const k of off) if (map[k]) o[map[k]] = false;
+    return o;
   }
 
   get backendName() {
@@ -66,14 +101,10 @@ class Graphics3D {
   #setTier(tier) {
     if (tier === this.tier) return;
     this.tier = tier;
-    this.tierSettings = TIERS[tier];
+    this.tierSettings = this.#withFx(TIERS[tier]);
+    // Only the resolution changes on screen: the donut keeps the features it was built with, so a
+    // tier change while someone watches the title doesn't pop. The 3D world uses the new tier.
     this.resize(this.view, this.dpr);
-    if (this.wheel && !this.wheelHidden) {
-      const old = this.wheel;
-      this.wheel = new Wheel(this);
-      this.wheel.resize(this.view.cssW, this.view.cssH);
-      old.dispose();
-    }
     this.world3d?.setTier(this.tierSettings);
   }
 
@@ -97,6 +128,10 @@ class Graphics3D {
 
   setLoadProgress(p) {
     this.wheel?.setProgress(p);
+  }
+
+  setReady(r) {
+    this.wheel?.setReady(r);
   }
 
   renderWheel(now, dt) {

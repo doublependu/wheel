@@ -16,3 +16,18 @@ procedural cat so the 2D → 3D pop-out lines up.
 Rejected: "An Animated Cat" (Sketchfab `aec25699…`) — its description says it isn't the uploader's
 work; it traces back to a rip of the *Murdered: Soul Suspect* game cat, so its CC-BY label isn't
 trustworthy.
+
+## Obstacles
+
+Cute low-poly CC-BY models (credits in `CREDITS.md` and `public/models/obstacles.json`).
+
+1. Import with the Blender MCP `import_asset` tool into a scene with "use Sketchfab" on, and name the
+   sources as `import_obstacles.py` expects (its header lists the UIDs): `src_cucumber` (+ `_stem`,
+   separated from the vegetable set), `src_pot`, `src_vacuum`, and the crow's root `src_crow`.
+2. Run `import_obstacles.py`: game-sized, grounded, facing −X; the vacuum is recoloured and gets googly
+   eyes; the crow's wings hang on hinge empties (the game flaps them in code).
+3. Run `export_obstacles.py`, then optimize (meshopt + WebP, ≈83 KB). Keep `--join false --flatten false`
+   so the crow's wing hinges survive.
+4. Run `render_obstacle_sprites.py` (side views at 384 px per unit, crow flap frames), then
+   `npm run sprites` turns them into `src/assets/obstacles.{png,json}` (palette rules in
+   `tools/obstacle-look.mjs`).

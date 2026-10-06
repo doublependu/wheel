@@ -4,7 +4,8 @@ import * as THREE from 'three/webgpu';
 import {
   pass, mrt, output, velocity, normalView, directionToColor, colorToDirection, uniform, vec2, vec3, vec4, float, mix, color,
   screenUV, screenSize, renderOutput, smoothstep, length, floor, fract, dot, max, exp, sRGBTransferOETF, texture,
-  uv, attribute, int, hash, atan, cos, normalLocal,
+  uv, attribute, int, hash, atan, cos, normalLocal, positionViewDirection, abs, positionWorld, Fn, luminance, sample,
+  convertToTexture,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
@@ -17,7 +18,8 @@ import { godrays } from 'three/addons/tsl/display/GodraysNode.js';
 import { makeMaterials, makeObstacle, makeSceneryMaterials, makeTile, TILE } from './props3d.js';
 import { makeCatMaterials, ProceduralCat } from './cat3d.js';
 import { loadGltfCat } from './gltfCat.js';
-import { PPU } from '../config.js';
+import { loadObstacleModels, addRim, OBSTACLE_LAYER } from './obstacleModels.js';
+import { PPU, OBSTACLES } from '../config.js';
 import { crunchNode } from './wheel.js';
 
 const C = (h) => new THREE.Color(h);
@@ -27,10 +29,51 @@ const clamp01 = (t) => Math.min(1, Math.max(0, t));
 
 // Look per era: sky gradient (top, horizon), fog, lights, camera rig.
 const LOOK = {
-  5: { top: '#07081c', mid: '#1c1a44', horizon: '#4a2f58', fog: '#1b1838', fogNear: 10, fogFar: 42, hemiSky: '#5a5aa0', hemiGround: '#141018', hemi: 1.3, sunColor: '#a8b4ff', sun: 1.6, sunDir: [-0.4, 0.9, 0.6], exposure: 1.0, stars: 1, fov: 30, yaw: 0, pitch: 0.02, distMul: 1.0, lift: 0, shadow: 0, windows: 1.2, sunElev: -0.5 },
-  6: { top: '#1d3a6e', mid: '#5f86bd', horizon: '#e6c9b8', fog: '#a9b9d4', fogNear: 22, fogFar: 90, hemiSky: '#c8dcff', hemiGround: '#4a3a28', hemi: 1.6, sunColor: '#ffe6cc', sun: 2.2, sunDir: [-0.35, 0.75, 0.55], exposure: 1.0, stars: 0, fov: 36, yaw: -0.16, pitch: 0.08, distMul: 0.98, lift: 0.4, shadow: 1, windows: 0.5, sunElev: -0.05 },
-  7: { top: '#2b5d9c', mid: '#8fb4d8', horizon: '#ffc58a', fog: '#f2c49a', fogNear: 30, fogFar: 140, hemiSky: '#ffe2bd', hemiGround: '#3c2c20', hemi: 1.15, sunColor: '#ffd3a1', sun: 5.0, sunDir: [-0.25, 0.32, -0.9], exposure: 1.05, stars: 0, fov: 40, yaw: -0.22, pitch: 0.05, distMul: 0.92, lift: 0.1, shadow: 1, windows: 0.15, sunElev: 0.16 },
+  5: { top: '#07081c', mid: '#1c1a44', horizon: '#4a2f58', fog: '#1b1838', fogNear: 10, fogFar: 42, hemiSky: '#5a5aa0', hemiGround: '#141018', hemi: 1.3, sunColor: '#a8b4ff', sun: 1.6, sunDir: [-0.4, 0.9, 0.6], exposure: 1.0, stars: 1, fov: 30, yaw: 0, pitch: 0.02, distMul: 1.0, lift: 0, shadow: 0, windows: 1.2, sunElev: -0.5, rim: 2.6, rimLow: 1, rimColor: '#b4c4ff', contact: 0.35, ink: 0.85, catRim: 0.5 },
+  6: { top: '#1d3a6e', mid: '#5f86bd', horizon: '#e6c9b8', fog: '#a9b9d4', fogNear: 22, fogFar: 90, hemiSky: '#c8dcff', hemiGround: '#4a3a28', hemi: 1.6, sunColor: '#ffe6cc', sun: 2.2, sunDir: [-0.35, 0.75, 0.55], exposure: 1.0, stars: 0, fov: 36, yaw: -0.16, pitch: 0.08, distMul: 0.98, lift: 0.4, shadow: 1, windows: 0.5, sunElev: -0.05, rim: 1.5, rimLow: 0, rimColor: '#fff0dc', contact: 0.55, ink: 0.9, catRim: 0.18 },
+  7: { top: '#2b5d9c', mid: '#8fb4d8', horizon: '#ffc58a', fog: '#f2c49a', fogNear: 30, fogFar: 140, hemiSky: '#ffe2bd', hemiGround: '#3c2c20', hemi: 1.15, sunColor: '#ffd3a1', sun: 5.0, sunDir: [-0.25, 0.32, -0.9], exposure: 1.05, stars: 0, fov: 40, yaw: -0.22, pitch: 0.05, distMul: 0.92, lift: 0.1, shadow: 1, windows: 0.15, sunElev: 0.16, rim: 1.4, rimLow: 0, rimColor: '#ffe6c4', contact: 0.55, ink: 0.9, catRim: 0.18 },
 };
+
+// Adaptive ink: obstacle pixels on the silhouette edge take a colour opposite in lightness to the
+// background just outside them, so an obstacle reads against a pale lane and dark grass alike.
+// `color` is the scene pass's linear colour; `maskDepth` the depth of a pass that draws only the
+// obstacles (1 = no obstacle).
+const INK_DARK = vec3(0.01, 0.008, 0.016);
+const INK_LIGHT = vec3(1.0, 0.93, 0.82);
+const OFFS = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7]];
+function inkOutline(color, maskDepth, strength, widthPx) {
+  const maskAt = (uvn) => maskDepth.sample(uvn).r.lessThan(0.99999).select(float(1), float(0));
+  return Fn(() => {
+    const px = vec2(1).div(screenSize);
+    const bg = vec3(0).toVar();
+    const w = float(0).toVar();
+    const near = float(0).toVar();
+    for (const [dx, dy] of OFFS) {
+      const d = vec2(dx, dy);
+      // the ink band: obstacle pixels within widthPx of the outside
+      near.addAssign(float(1).sub(maskAt(screenUV.add(px.mul(d).mul(widthPx)))));
+      // the background a little further out decides the ink's lightness
+      const uvn = screenUV.add(px.mul(d).mul(widthPx * 2.2));
+      const outside = float(1).sub(maskAt(uvn));
+      bg.addAssign(color.sample(uvn).rgb.mul(outside));
+      w.addAssign(outside);
+    }
+    const c = color.sample(screenUV);
+    const edge = maskAt(screenUV).mul(smoothstep(0.3, 1.2, near));
+    const ink = luminance(bg.div(w.max(0.001))).greaterThan(0.16).select(INK_DARK, INK_LIGHT);
+    return vec4(mix(c.rgb, ink, edge.mul(strength)), c.a);
+  })();
+}
+
+// A pass that draws only the obstacles (flat), whose depth is the ink's silhouette mask.
+function obstacleMaskPass(scene, camera, material) {
+  const p = pass(scene, camera);
+  const layers = new THREE.Layers();
+  layers.set(OBSTACLE_LAYER);
+  p.setLayers(layers);
+  p.overrideMaterial = material;
+  return p;
+}
 
 export async function createWorld3D(g) {
   const w = new World3D(g);
@@ -57,8 +100,17 @@ class World3D {
   async load() {
     this.#buildScene();
     try {
+      this.obModels = await loadObstacleModels(this.rimNode);
+      if (this.obModels) this.credits.push(...this.obModels.credits);
+    } catch (e) {
+      console.warn('obstacle models unavailable, using the procedural ones', e);
+    }
+    try {
       this.gltfCat = await loadGltfCat(this.catMats);
       if (this.gltfCat) {
+        this.gltfCat.object.traverse((o) => {
+          if (o.isMesh && o.material?.isNodeMaterial) addRim(o.material, this.catRimNode);
+        });
         this.scene.add(this.gltfCat.object);
         this.gltfCat.object.visible = false;
         this.credits.push(...this.gltfCat.credits);
@@ -141,9 +193,24 @@ class World3D {
     this.sunWheel.visible = false;
     scene.add(this.sunWheel);
 
+    // Readability rim: a fresnel edge light on obstacles and the cat, coloured and sized per stage,
+    // so dark shapes still separate from a dark sky or ground.
+    this.rimColorU = uniform(C(LOOK[5].rimColor));
+    this.rimU = uniform(LOOK[5].rim);
+    // Low parts sit against the pale lane and need no rim in daylight; higher parts (a pot's top,
+    // the crow) sit against the darker grass behind it. `rimLow` is the rim kept at ground level.
+    this.rimLowU = uniform(LOOK[5].rimLow);
+    const fresnel = float(1).sub(abs(dot(normalView, positionViewDirection))).pow(2);
+    const byHeight = mix(this.rimLowU, float(1), smoothstep(0.22, 0.45, positionWorld.y));
+    this.rimNode = this.rimColorU.mul(this.rimU).mul(fresnel).mul(byHeight);
+    this.catRimU = uniform(LOOK[5].catRim); // the cat stays black, just edged (moonlit at night)
+    this.catRimNode = this.rimColorU.mul(this.rimU).mul(fresnel).mul(this.catRimU);
+
     // obstacles and cats
     this.obMats = makeMaterials();
     this.catMats = makeCatMaterials();
+    for (const k of ['fur', 'furFlat']) addRim(this.catMats[k], this.catRimNode);
+    for (const m of Object.values(this.obMats)) addRim(m, this.rimNode);
     this.catLow = new ProceduralCat(this.catMats, true);
     this.catSmooth = new ProceduralCat(this.catMats, false);
     scene.add(this.catLow.object, this.catSmooth.object);
@@ -187,7 +254,13 @@ class World3D {
       this.retro = rp;
       (this.retroPasses ??= []).push(rp);
       this.retroScaleU ??= uniform(this.#retroScale());
-      const c = renderOutput(rp);
+      // the same ink as the smooth stages, at the console's resolution
+      this.inkU ??= uniform(0);
+      this.inkMaskMat ??= new THREE.MeshBasicNodeMaterial({ fog: false });
+      const mp = obstacleMaskPass(scene, camera, this.inkMaskMat);
+      mp.setResolutionScale(this.#retroScale());
+      (this.retroPasses ??= []).push(mp);
+      const c = renderOutput(inkOutline(rp.getTextureNode(), mp.getTextureNode('depth'), this.inkU, 1 / this.#retroScale()));
       // 15-bit colour with ordered dither, like the console's framebuffer
       const cell = floor(screenUV.mul(screenSize).mul(this.retroScaleU));
       const dth = fract(dot(cell, vec2(0.5, 0.25)).add(fract(cell.y.mul(0.5)).mul(0.5))).sub(0.5);
@@ -201,9 +274,16 @@ class World3D {
       const col = sp.getTextureNode('output');
       const depth = sp.getTextureNode('depth');
       const vel = sp.getTextureNode('velocity');
-      let out = col;
+      this.inkU ??= uniform(0);
+      this.inkMaskMat ??= new THREE.MeshBasicNodeMaterial({ fog: false });
+      const maskPass = obstacleMaskPass(scene, camera, this.inkMaskMat);
+      const maskDepth = maskPass.getTextureNode('depth');
+      // ink last when temporal or lens effects would soften it, so obstacle edges stay crisp
+      const lensFx = tier.traa || (era7 && (tier.dof || tier.motionBlur));
+      let out = lensFx ? col : inkOutline(col, maskDepth, this.inkU, 2);
       if (useAO) {
-        const aoPass = ao(depth, colorToDirection(sp.getTextureNode('normal')), camera);
+        const normalTex = sp.getTextureNode('normal');
+        const aoPass = ao(depth, sample((suv) => colorToDirection(normalTex.sample(suv))), camera);
         aoPass.resolutionScale = 0.5;
         out = out.mul(vec4(vec3(mix(float(1), aoPass.getTextureNode().r, 0.8)), 1));
       }
@@ -218,7 +298,8 @@ class World3D {
         this.focusU ??= uniform(15);
         out = dof(out, sp.getViewZNode(), this.focusU, uniform(9), uniform(0.8));
       }
-      if (era7 && tier.motionBlur) out = motionBlur(out, vel.mul(0.5), int(8));
+      if (era7 && tier.motionBlur) out = motionBlur(convertToTexture(out), vel.mul(0.5), int(8));
+      if (lensFx) out = inkOutline(convertToTexture(out), maskDepth, this.inkU, 2);
       out = out.add(bloom(out, era7 ? this.bloomU : 0.1, 0.35, era7 ? 1.3 : 1.2));
       let o = this.#output(out.mul(vec4(vec3(this.exposureU), 1)), this.hdrGain);
       if (!tier.traa) o = fxaa(o);
@@ -305,6 +386,12 @@ class World3D {
     this.sceneryMats.window.emissiveIntensity = L.windows;
     if (this.exposureU) this.exposureU.value = L.exposure;
     this.sunElev = L.sunElev;
+    this.rimU.value = L.rim;
+    this.rimLowU.value = L.rimLow;
+    this.catRimU.value = L.catRim;
+    if (this.contactU) this.contactU.value = L.contact;
+    if (this.inkU) this.inkU.value = L.ink;
+    this.rimColorU.value.set(L.rimColor);
     this.era = era;
   }
 
@@ -381,11 +468,34 @@ class World3D {
     let m = this.obstacleMeshes.get(o.id);
     if (m) return m;
     const pool = (this.pools[o.type] ??= []);
-    m = pool.pop() ?? makeObstacle(o.type, this.obMats);
+    if (!(m = pool.pop())) {
+      m = this.obModels?.has(o.type) ? this.obModels.make(o.type) : makeObstacle(o.type, this.obMats);
+      m.traverse((c) => c.isMesh && c.layers.enable(OBSTACLE_LAYER));
+      m.add(this.#contactShadow(o.type));
+    }
     if (!m.parent) this.scene.add(m);
     m.visible = true;
     this.obstacleMeshes.set(o.id, m);
     return m;
+  }
+
+  // A soft dark patch on the lane under each obstacle: grounds it, and gives light edges (the
+  // vacuum's top, a pale crow) something darker to read against.
+  #contactShadow(type) {
+    if (!this.contactMat) {
+      this.contactU = uniform(LOOK[5].contact);
+      const r = length(uv().sub(0.5)).mul(2);
+      this.contactMat = new THREE.MeshBasicNodeMaterial({ color: '#000000', transparent: true, depthWrite: false, fog: false });
+      this.contactMat.opacityNode = float(1).sub(smoothstep(0, 1, r)).pow(1.5).mul(this.contactU);
+      this.contactGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    }
+    const def = OBSTACLES[type];
+    const blob = new THREE.Mesh(this.contactGeo, this.contactMat);
+    blob.scale.set(def.w * 1.6, 1, def.flies ? 0.9 : 1.2);
+    blob.position.y = 0.035; // above the lane even while a crow bobs
+    blob.renderOrder = -1;
+    blob.userData.contact = true;
+    return blob;
   }
 
   #releaseObstacle(id) {
@@ -569,6 +679,47 @@ class World3D {
       this.popout = null;
       this.hideCat = false;
     }
+  }
+
+  // Dev (?contrast): obstacles in white on black from the current camera, no post-processing,
+  // rendered off-screen. Resolves to { data, width, height } with rows top-down.
+  async renderMask(world, era, now = 0) {
+    this.#sync(world, era, now, 0);
+    this.#rig(era);
+    this.maskMat ??= new THREE.MeshBasicNodeMaterial({ color: '#ffffff', fog: false });
+    const keep = new Set();
+    for (const m of this.obstacleMeshes.values()) m.traverse((o) => !o.userData.contact && keep.add(o));
+    const hidden = [];
+    this.scene.traverse((o) => {
+      if ((o.isMesh || o.isSprite) && o.visible && !keep.has(o)) {
+        o.visible = false;
+        hidden.push(o);
+      }
+    });
+    const { backgroundNode, fog } = this.scene;
+    this.scene.backgroundNode = null;
+    this.scene.background = new THREE.Color(0);
+    this.scene.fog = null;
+    this.scene.overrideMaterial = this.maskMat;
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.maskRT ??= new THREE.RenderTarget(1, 1);
+    this.maskRT.setSize(size.x, size.y);
+    this.renderer.setRenderTarget(this.maskRT);
+    this.renderer.render(this.scene, this.camera);
+    this.renderer.setRenderTarget(null);
+    this.scene.overrideMaterial = null;
+    this.scene.background = null;
+    this.scene.backgroundNode = backgroundNode;
+    this.scene.fog = fog;
+    for (const o of hidden) o.visible = true;
+    const raw = await this.renderer.readRenderTargetPixelsAsync(this.maskRT, 0, 0, size.x, size.y);
+    // WebGPU pads every row but the last to 256 bytes; WebGL reads bottom-up
+    const row = size.x * 4;
+    const stride = size.y > 1 ? (raw.length - row) / (size.y - 1) : row;
+    const flip = !this.renderer.backend.isWebGPUBackend;
+    const data = new Uint8Array(row * size.y);
+    for (let y = 0; y < size.y; y++) data.set(raw.subarray((flip ? size.y - 1 - y : y) * stride, (flip ? size.y - 1 - y : y) * stride + row), y * row);
+    return { data, width: size.x, height: size.y };
   }
 
   // ---------- render ----------

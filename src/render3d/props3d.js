@@ -117,9 +117,10 @@ export function makeSceneryMaterials(distU) {
   const wx = positionWorld.x.add(distU);
   const grassN = mx_noise_float(vec3(wx.mul(0.6), positionWorld.z.mul(0.6), 0));
   const fine = mx_noise_float(vec3(wx.mul(7), positionWorld.z.mul(7), 3));
-  const path = float(1).sub(smoothstep(0.85, 1.15, abs(positionWorld.z)));
+  // a wide, pale sandy lane: every obstacle (mid or dark values) reads against it
+  const path = float(1).sub(smoothstep(1.45, 1.8, abs(positionWorld.z)));
   const grass = mix(color('#2d4a1e'), color('#4f7a2c'), grassN.mul(0.5).add(0.5).add(fine.mul(0.15)));
-  const dirt = mix(color('#5a4632'), color('#7a6044'), fine.mul(0.5).add(0.5));
+  const dirt = mix(color('#d9c8a2'), color('#ece0c2'), fine.mul(0.5).add(0.5));
   const stripes = fract(wx.mul(0.5)).lessThan(0.04).select(float(0.92), float(1));
   return {
     ground: std({ roughness: 0.95, colorNode: mix(grass, dirt.mul(stripes), path) }),
@@ -145,7 +146,7 @@ export function makeTile(seed, M) {
   const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), M.wood, Math.ceil(TILE / 1.2));
   const m4 = new THREE.Matrix4();
   for (let i = 0; i < posts.count; i++) {
-    m4.makeTranslation(i * 1.2, 0.45, -1.7);
+    m4.makeTranslation(i * 1.2, 0.45, -2.3);
     posts.setMatrixAt(i, m4);
   }
   posts.castShadow = true;
@@ -153,7 +154,7 @@ export function makeTile(seed, M) {
   g.add(posts);
   for (const y of [0.35, 0.7]) {
     const rail = mesh(new THREE.BoxGeometry(TILE, 0.07, 0.04), M.wood);
-    rail.position.set(TILE / 2, y, -1.66);
+    rail.position.set(TILE / 2, y, -2.26);
     rail.receiveShadow = true;
     g.add(rail);
   }

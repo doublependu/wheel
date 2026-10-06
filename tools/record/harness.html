@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Wheel recorder</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      /* a 16:9 game at the top left; the recorder crops exactly this region */
+      iframe { position: fixed; left: 0; top: 0; border: 0; }
+      #rec { position: fixed; left: 8px; top: 8px; z-index: 2; font: 14px monospace; }
+    </style>
+  </head>
+  <body>
+    <!-- Clicking this (a real user gesture) starts tab capture of this whole page; the game then
+         loads in the iframe, so the capture survives the game's own page load. -->
+    <button id="rec" type="button">record</button>
+    <iframe id="game" allow="autoplay; fullscreen"></iframe>
+    <script>
+      const MIMES = {
+        h264: ['video/mp4;codecs=avc1.640033,mp4a.40.2', 'video/webm;codecs=h264,opus'],
+        vp9: ['video/webm;codecs=vp9,opus'],
+        vp8: ['video/webm;codecs=vp8,opus'],
+      };
+      let recorder = null;
+      let pending = Promise.resolve();
+
+      document.getElementById('rec').addEventListener('click', async (e) => {
+        e.target.remove();
+        const { fps, bitrate, url, codec } = window.__recordOptions;
+        // full screen gives the game the most device pixels (capture is in device pixels)
+        await document.documentElement.requestFullscreen().catch(() => {});
+        await new Promise((r) => setTimeout(r, 600));
+        const game = document.getElementById('game');
+        const w = Math.min(innerWidth, Math.floor((innerHeight * 16) / 9));
+        game.style.width = `${w}px`;
+        game.style.height = `${Math.round((w * 9) / 16)}px`;
+        const dpr = devicePixelRatio;
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: fps, max: fps }, width: { ideal: Math.round(innerWidth * dpr) }, height: { ideal: Math.round(innerHeight * dpr) } },
+          audio: { suppressLocalAudioPlayback: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          preferCurrentTab: true,
+          selfBrowserSurface: 'include',
+          surfaceSwitching: 'exclude',
+        });
+        const mimeType = [...MIMES[codec], ...MIMES.vp8].find((m) => MediaRecorder.isTypeSupported(m));
+        recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: bitrate, audioBitsPerSecond: 256000 });
+        recorder.ondataavailable = (ev) => {
+          if (!ev.data.size) return;
+          // keep chunk order: each one is handed to Node only after the previous one landed
+          pending = pending.then(async () => {
+            const bytes = new Uint8Array(await ev.data.arrayBuffer());
+            let bin = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+            await window.saveChunk(btoa(bin));
+          });
+        };
+        recorder.start(1000);
+        const track = stream.getVideoTracks()[0];
+        const r = game.getBoundingClientRect();
+        window.__recordInfo = {
+          mimeType, settings: track.getSettings(), audio: stream.getAudioTracks().length, dpr,
+          crop: { x: Math.round(r.left * dpr), y: Math.round(r.top * dpr), w: Math.round(r.width * dpr), h: Math.round(r.height * dpr) },
+        };
+        game.src = url;
+      });
+
+      window.stopRecording = () =>
+        new Promise((resolve) => {
+          recorder.onstop = () => pending.then(resolve);
+          recorder.stop();
+          for (const t of recorder.stream.getTracks()) t.stop();
+        });
+    </script>
+  </body>
+</html>

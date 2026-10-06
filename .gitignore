@@ -153,3 +153,7 @@ vite.config.ts.timestamp-*
 
 # Wrangler local state
 .wrangler/
+
+# Game recordings (npm run record) and Blender intermediates
+recordings/
+tools/blender/.out/

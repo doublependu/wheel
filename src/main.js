@@ -4,14 +4,16 @@ import { Hud } from './ui/hud.js';
 import { World } from './sim/world.js';
 import { Renderer2D } from './render2d/renderer2d.js';
 import { computeView } from './view.js';
-import { SIM_DT, MAX_FRAME_DT, ERA_COUNT } from './config.js';
-import { createAutopilot } from './sim/autopilot.js';
+import { SIM_DT, MAX_FRAME_DT, ERA_COUNT, WHEEL } from './config.js';
+import { createAutopilot, parseCrash } from './sim/autopilot.js';
+import { loadObstacleAtlas } from './render2d/obstacleAtlas.js';
 
 const params = new URLSearchParams(location.search);
 const intParam = (k) => (params.has(k) ? parseInt(params.get(k), 10) : NaN);
 const START_ERA = Math.min(ERA_COUNT, Math.max(1, intParam('era') || 1));
 const FIXED_SEED = intParam('seed');
 const AUTOPILOT = params.has('autopilot');
+const CRASH = parseCrash(params.get('crash')); // autopilot: when to stop jumping (recordings)
 const TIMESCALE = import.meta.env.DEV && params.has('timescale') ? Number(params.get('timescale')) || 1 : 1;
 const MUTE_KEY = 'wheel.muted';
 
@@ -36,6 +38,12 @@ let last = performance.now() / 1000;
 let acc = 0;
 let autopilot = null;
 let muted = false;
+// title: Play shows once the donut has run a while (see WHEEL in config.js)
+let playShown = false;
+let atlasDone = false;
+let pendingAtlas = null;
+let wheel3dAt = 0;
+let g3dFailed = false;
 try {
   muted = localStorage.getItem(MUTE_KEY) === '1';
 } catch {
@@ -67,17 +75,36 @@ function prepare2DEras() {
   });
 }
 
-function load3D() {
+function load3D(forceWebGL = false) {
   if (g3dLoading) return g3dLoading;
   g3dLoading = import('./render3d/graphics3d.js')
-    .then((m) => m.createGraphics3D({ canvas: $('c3d'), view, dpr, params }))
+    .then((m) => m.createGraphics3D({ canvas: $('c3d'), view, dpr, params, forceWebGL }))
     .then((g) => {
       g3d = g;
+      g.onLost = (info) => {
+        if (g3d !== g || forceWebGL) return;
+        console.warn('WebGPU device lost, switching to WebGL2:', info.message);
+        // a canvas keeps its first context type, so WebGL2 needs a fresh one
+        const fresh = document.createElement('canvas');
+        fresh.id = 'c3d';
+        $('c3d').replaceWith(fresh);
+        body.classList.remove('wheel-3d');
+        wheel3dAt = 0;
+        g3d = null;
+        g3dLoading = null;
+        load3D(true);
+      };
+      if (g.lost) {
+        g.onLost(g.lost);
+        return null;
+      }
       if (screen === 'title') {
         g3d.showWheel();
+        g3d.setReady(playShown);
         body.classList.add('show-3d');
         g3d.onWheelVisible = () => {
           body.classList.add('wheel-3d');
+          wheel3dAt = performance.now() / 1000;
           performance.mark('wheel:3d');
         };
       }
@@ -86,6 +113,7 @@ function load3D() {
     })
     .catch((err) => {
       console.warn('3D graphics unavailable', err);
+      g3dFailed = true;
       return null;
     });
   return g3dLoading;
@@ -126,8 +154,12 @@ function setScreen(name) {
 }
 
 function startRun(now) {
+  if (pendingAtlas) {
+    r2d.setObstacleAtlas(pendingAtlas);
+    pendingAtlas = null;
+  }
   world.reset({ seed: newSeed(), gate, startEra: START_ERA });
-  autopilot = AUTOPILOT ? createAutopilot() : null;
+  autopilot = AUTOPILOT ? createAutopilot({ human: params.get('autopilot') === 'human', crash: CRASH, seed: world.seed }) : null;
   acc = 0;
   input.clear();
   shownEra = 0;
@@ -223,6 +255,7 @@ function toggleMute() {
   audio?.setMuted(muted);
 }
 hud.muteBtn.addEventListener('click', toggleMute);
+$('play').addEventListener('click', () => input.onPress('button'));
 hud.pauseBtn.addEventListener('click', () => pause());
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
@@ -230,15 +263,29 @@ document.addEventListener('visibilitychange', () => {
     audio?.suspend(true);
   } else audio?.suspend(false);
 });
-window.addEventListener('blur', () => pause());
+// Hands-free runs (recordings) keep going when another window takes focus.
+window.addEventListener('blur', () => AUTOPILOT || pause());
 
-// Title wheel progress: core, audio, 3D wheel, 3D world.
+// Title donut progress: core, obstacle sprites, audio, 3D donut, 3D world.
 function loadProgress() {
-  let p = 0.25;
-  if (audio) p += 0.25;
-  if (g3d) p += 0.25;
-  if (g3d?.isReady(7)) p += 0.25;
+  let p = 0.2;
+  if (atlasDone) p += 0.2;
+  if (audio) p += 0.2;
+  if (g3d || g3dFailed) p += 0.2;
+  if (g3d?.isReady(7) || g3dFailed) p += 0.2;
   return p;
+}
+
+// Play appears after the donut has run for WHEEL.minRun s, the obstacle sprites are in and the
+// 3D donut has been on screen for WHEEL.min3D s; never later than WHEEL.cap s.
+function checkPlay(now) {
+  if (playShown) return;
+  const donutOk = g3dFailed || (wheel3dAt > 0 && now - wheel3dAt >= WHEEL.min3D);
+  if (now < WHEEL.cap && !(now >= WHEEL.minRun && atlasDone && donutOk)) return;
+  playShown = true;
+  hud.setReady('Tap or press Space to play');
+  g3d?.setReady(true);
+  performance.mark('wheel:interactive');
 }
 
 // ---------- loop ----------
@@ -289,8 +336,20 @@ function frame(ms) {
     g3d.setLoadProgress(loadProgress());
     g3d.renderWheel(now, dt);
   }
+  if (screen === 'title') checkPlay(performance.now() / 1000);
   audio?.update(world, screen, now);
   requestAnimationFrame(frame);
+}
+
+// Dev: ?contrast measures obstacle/background contrast in every stage (see src/dev/contrast.js).
+if (import.meta.env.DEV && params.has('contrast')) {
+  setTimeout(async () => {
+    const { runContrast } = await import('./dev/contrast.js');
+    for (let e = 1; e <= 4; e++) r2d.prepare(e);
+    const atlas = await loadObstacleAtlas().catch(() => null);
+    if (atlas) r2d.setObstacleAtlas(atlas);
+    window.__contrast = await runContrast({ r2d, g3d: await load3D() });
+  }, 0);
 }
 
 // Debug handle for automated checks in development builds.
@@ -300,8 +359,14 @@ if (import.meta.env.DEV) {
 
 // ---------- boot ----------
 r2d.prepare(Math.min(START_ERA, 4));
-hud.setReady('Tap or press Space to start');
-performance.mark('wheel:interactive');
+loadObstacleAtlas()
+  .then((atlas) => {
+    // never swap sprites under a running game; the next run picks them up
+    if (screen === 'run' || screen === 'paused') pendingAtlas = atlas;
+    else r2d.setObstacleAtlas(atlas);
+  })
+  .catch((e) => console.warn('obstacle sprites unavailable, using the procedural ones', e))
+  .finally(() => (atlasDone = true));
 requestAnimationFrame(frame);
 // Progressive loading after first paint: audio core, then three.js for the wheel and 3D eras.
 setTimeout(() => {

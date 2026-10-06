@@ -1,0 +1,9 @@
+{
+  "file": "obstacles.glb",
+  "credits": [
+    "Cucumber: from <a href=\"https://sketchfab.com/3d-models/collection-of-vegetables-8f9206e5dff740afbab92e073dfe0a93\" target=\"_blank\" rel=\"noopener\">Collection of Vegetables</a> by Johan Hoof, <a href=\"https://creativecommons.org/licenses/by/4.0/\" target=\"_blank\" rel=\"noopener\">CC BY 4.0</a>. Changes: separated from the set, resized.",
+    "Cactus pot: <a href=\"https://sketchfab.com/3d-models/kaktiss-a5330259df174753a35abfde4c966dc1\" target=\"_blank\" rel=\"noopener\">Kaktiss</a> by LanaGre, <a href=\"https://creativecommons.org/licenses/by/4.0/\" target=\"_blank\" rel=\"noopener\">CC BY 4.0</a>. Changes: resized, optimized.",
+    "Robot vacuum: <a href=\"https://sketchfab.com/3d-models/low-poly-roomba-be32b697116f4c70971da8c53b3b6653\" target=\"_blank\" rel=\"noopener\">Low-poly Roomba</a> by Seats, <a href=\"https://creativecommons.org/licenses/by/4.0/\" target=\"_blank\" rel=\"noopener\">CC BY 4.0</a>. Changes: recoloured, made taller, googly eyes added.",
+    "Crow: <a href=\"https://sketchfab.com/3d-models/low-poly-crow-00a776f578304cce8c096fc0034582ef\" target=\"_blank\" rel=\"noopener\">Low Poly Crow</a> by DracTheZach, <a href=\"https://creativecommons.org/licenses/by/4.0/\" target=\"_blank\" rel=\"noopener\">CC BY 4.0</a>. Changes: wings split for a flap animation, resized."
+  ]
+}

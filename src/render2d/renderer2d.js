@@ -19,6 +19,7 @@ export class Renderer2D {
     this.dpr = 1;
     this.transition = null;
     this.crunch = 0;
+    this.atlas = null; // pixel-art obstacles from the 3D models (fallback: procedural sprites)
   }
 
   resize(view, dpr) {
@@ -31,8 +32,18 @@ export class Renderer2D {
 
   // Sprites are built once; backgrounds per viewport size. Cheap enough to do in one go.
   prepare(era) {
-    if (!this.sprites[era]) this.sprites[era] = { cat: buildCatSprites(era), obstacles: buildObstacleSprites(era) };
+    if (!this.sprites[era]) this.sprites[era] = { cat: buildCatSprites(era), obstacles: this.#obstacleSprites(era) };
     if (this.view && !this.eraViews[era]) this.#buildEraView(era);
+  }
+
+  #obstacleSprites(era) {
+    return this.atlas?.frames(era) ?? buildObstacleSprites(era);
+  }
+
+  // Swap in the model-rendered obstacle sprites for every stage prepared so far.
+  setObstacleAtlas(atlas) {
+    this.atlas = atlas;
+    for (const era of Object.keys(this.sprites)) this.sprites[era].obstacles = this.#obstacleSprites(era);
   }
 
   isReady(era) {
@@ -70,7 +81,7 @@ export class Renderer2D {
 
     for (const o of world.obstacles) {
       const frames = sp.obstacles[o.type];
-      const f = frames[frames.length > 1 ? Math.floor(time * 6 + o.seed * 2) % frames.length : 0];
+      const f = frames[frames.length > 1 ? Math.floor(time * 3 * frames.length + o.seed * 4) % frames.length : 0]; // 3 flaps/s
       const x = catX + Math.round((o.x - dist) * ppu);
       if (x - f.ox > vw || x + f.canvas.width < 0) continue;
       ctx.drawImage(f.canvas, x - f.ox, groundY - f.oy);

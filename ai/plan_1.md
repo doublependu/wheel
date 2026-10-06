@@ -1,6 +1,8 @@
 # Plan 1: readable obstacles, a photoreal donut loader, Sketchfab obstacles and a full-game video
 
-Answers `ai/prompt_1.md`. Nothing is implemented yet.
+Answers `ai/prompt_1.md`.
+
+**Revision 2** (follow-up in chat): defaults accepted, except the obstacles are **cute, stylized low-poly** models instead of photoscans.
 
 ## 0. Summary
 
@@ -8,7 +10,7 @@ Answers `ai/prompt_1.md`. Nothing is implemented yet.
 |---|---|
 | Issue 1: obstacles blend into the background | Measure contrast per stage and per obstacle with a dev tool, then fix it with a value-separation rule: background layers stay in a value range the obstacles never use, and obstacles get an outline in 2D and a rim term in 3D. Re-measure until every stage passes. |
 | Feature 1: donut loading wheel | The SUPER wheel becomes a SUPER **donut**: a lacquered rainbow torus with ~64 anodized-aluminium bars that rise around its rim. Photoreal studio lighting, contact shadows, AO and DoF, with **no bloom**. The bars fill as a progress ring, then keep dancing. **Play** appears in the donut's hole after a minimum run time (default 2.5 s) and the donut keeps running until it's clicked. |
-| Feature 2: Sketchfab obstacles, pixel art early | Import 4 CC-BY models through Blender MCP and check each licence. Then normalise, decimate and export one `obstacles.glb` for stages 5–7. Blender also renders sprite sources, which a Node script turns into a palette-quantized pixel-art atlas for stages 1–4. |
+| Feature 2: Sketchfab obstacles, pixel art early | Import 4 cute, stylized low-poly CC-BY models through Blender MCP and check each licence. Then normalise and export one `obstacles.glb` for stages 5–7. Blender also renders sprite sources, which a Node script turns into a palette-quantized pixel-art atlas for stages 1–4. |
 | Recording | Build a `npm run record` harness: system Chrome on this laptop's GPU, Chrome tab capture (video and audio in sync), humanized autopilot, 1080p60. The output is an MP4 covering wheel → Play → stages 1–7 → game over. |
 
 ## 1. Facts checked while planning
@@ -32,14 +34,14 @@ Answers `ai/prompt_1.md`. Nothing is implemented yet.
 | 5 (PS1 night) | The crow (`#121018`), vacuum body (`#2c3038`) and dark cucumber are all against a night sky and fog in the `#07–#1b` range. |
 | 6–7 | The dark-green cucumber is on grass and dirt of similar value, with the brown fence directly behind the lane. |
 
-### Sketchfab candidates (preview-checked; licence and origin are re-checked at import)
+### Sketchfab picks: cute, stylized low-poly (preview-checked; licence and origin re-checked at import)
 
 | Obstacle | Primary | Backups | Rejected |
 |---|---|---|---|
-| Cucumber | "Cucumber" by db4 `0aef5e1b2ef446d7a5663674e75d45c8` (photoscan, whole, 60k faces → decimate) | "Pickling Cucumber" by chapmanecodesign `2f0743a1…` (3.3k); "Cucumber" by bemute `d314a5dd…` (20k) | Cut or sliced ones |
-| Pot | "Tree-like Cactus Cereus peruvianus" by matousekfoto `8b1baf5ffe894d95b8411c6bfec9042b` (photoscan, terracotta pot, 149k → decimate). It's a nice Chrome-dino cactus homage. | "Cactus Plant in Pot Low Poly" by zeekhan733 `c7d5e3ec…` (18.8k); "Kaktiss" by LanaGre `a5330259…` (1.4k, stylized) | "Kaktusz cserépben" (CC **NC**) |
-| Vacuum | "Robot vacuum cleaner low poly" by _moryak_ `7230d8d80e8b4a82b4a34a5e7926d0d3` (4.7k, white gloss) | GeniusPilot2016 `d850de39…` (2.8k); darkfrei `7d904c05…` (4.5k) | Xiaomi-branded uploads (brand trade dress); any logos get removed |
-| Crow | "Crow Ascend" by Lahcen.el `e2e6d407b18547d2a9ed37a1707042e1` (1.6k, flying pose, possibly animated) | "Crow" by zixisun51 `45a169ef…` (5.7k, realistic, standing → pose the wings in Blender); "American Crow V1" by warrenblyth `99ed138b…` (469) | "Little Nightmares" and "Hello Neighbor" crows (**game rips**); WildPoly3D and "Crow Fly" (**NC**); "Game ready crow" (**Free Standard**: no redistribution in a public repo); LostModels2025 "Crow" (the same uploader also lists it as NC) |
+| Cucumber | Cucumber from "Collection of Vegetables" by JohanHoof `8f9206e5dff740afbab92e073dfe0a93` (hand-painted low poly, 890 faces for the whole set) | Cucumber from "Low poly vegetables and fruits" by ranaaunhaider12 `42671c82…` (flat colour); "Lowpoly cucumber psx" by DinixGlasses `ab76397c…` (182) | Character cucumbers (Pickle Rick, Larry: someone else's IP); photoscans |
+| Pot | "Kaktiss" by LanaGre `a5330259df174753a35abfde4c966dc1` (1.4k, round cactus with a pink flower in a terracotta pot) | "Cactus Plant in Pot Low Poly" by zeekhan733 `c7d5e3ec…` (18.8k) | "Kaktusz cserépben" (CC **NC**); "Low Poly Cactus Set" (Free Standard) |
+| Vacuum | "Roomba" by Macwithav `94800ce82fe440d3868d53dd908a8836` (540 faces, glowing happy `^ ^` eyes). Its dark navy shell gets lightened for contrast (§2). | "Low-poly Roomba" by Seats `be32b697…` (888, white/black) | "Augustus Roomba" (NC); branded models with logos |
+| Crow | "Low Poly Crow" by DracTheZach `00a776f578304cce8c096fc0034582ef` (120 faces, blocky, big eye, yellow beak) | "Crow" by TheNorthernHarpy `05fd8f3f…` (96, blocky); "evil crow" by adrianld `9f46531d…` (272, flying pose) | WildPoly3D crows (cutest, but **NC**); game rips (Little Nightmares, Hello Neighbor); "Cartoon Crow" (Free Standard) |
 
 Rules carried over from the cat: CC-BY or CC0 only, no NC/ND, no "Free Standard". Check the description for rips. Credit every model in `CREDITS.md` and in the game.
 
@@ -123,10 +125,7 @@ Rules carried over from the cat: CC-BY or CC0 only, no NC/ND, no "Free Standard"
    - apply transforms; ground at y = 0; centred on x; the crow faces −X (toward the cat);
    - uniform-scale each model into its `OBSTACLES` visual box.
    - If a model's proportions don't fit, change the box and hitbox in `config.js` instead of stretching, then re-run `npm test` (jump window ≥ 400 ms, reachability).
-3. **Optimise**:
-   - decimate photoscans to about 2–4k triangles;
-   - bake a normal map from the original when the silhouette detail matters (cactus ribs, cucumber bumps);
-   - textures ≤ 512 px WebP; strip logos.
+3. **Optimise**: the models are already low poly (≤ 1.4k faces each), so there's no decimation. Merge each model's meshes, keep flat or painted materials, textures ≤ 512 px WebP, strip logos.
 4. **Crow flap**: use the model's own clip if it has one. Otherwise author a 2-pose flap loop (wing bones or vertex groups), the same way `author_cat_anims.py` authored the cat's run and jump.
 5. **`export_obstacles.py`**: one `public/models/obstacles.glb` (4 nodes + `Flap` clip), then `gltf-transform optimize` (meshopt). Target **≤ 400 KB**. Plus `obstacles.json` with node names, offsets and credits.
 6. **`render_obstacle_sprites.py`**:
@@ -191,7 +190,7 @@ Rules carried over from the cat: CC-BY or CC0 only, no NC/ND, no "Free Standard"
 
 ## 7. Risks
 
-- **Photoscans are heavy, and decimated ones look waxy.** Mitigation: a normal-map bake, or the low-poly backups.
+- **Low-poly models next to the smooth 3D world** can look toy-like in stage 7. That's intended (cute), and the PBR lighting, rim and shadows still apply.
 - **Auto pixel art can look mushy.** Mitigation: the line pass, per-stage palette maps and hand overrides per frame.
 - **Model proportions vs. hitboxes.** Mitigation: change the boxes rather than stretch, guarded by the existing tests.
 - **Tab capture at 1080p60 drops frames** (VP9 software encoding). Mitigation: H.264 when `isTypeSupported`, lower bitrate, or 1440×810 upscaled. The frame-time log tells us.
@@ -199,10 +198,10 @@ Rules carried over from the cat: CC-BY or CC0 only, no NC/ND, no "Free Standard"
 - **A Chrome window will be open on your desktop for about 4 min** during `npm run record`. Clicking into it no longer pauses the game; audio is muted locally.
 - **2.5 s to Play is slower than today's 0.15 s.** It's intentional and tunable (§3.2).
 
-## 8. Open questions (defaults in bold; I'll proceed with these unless told otherwise)
+## 8. Decisions (answered in chat)
 
-1. **"Donut" = a ring-shaped loading wheel (torus + rising bars)** vs. a literal glazed pastry donut with sprinkles.
-2. **Minimum wheel run 2.5 s** (inside the spec's 2–3 s). Longer would break the 3 s target.
-3. **Photoreal photoscan obstacles** vs. stylized low-poly ones (a closer match to the stylized Somali cat).
-4. **Video: 1920×1080 at 60 fps, landscape MP4, ending in a deliberate crash about 40 s into stage 7.** Add a vertical 1080×1920 cut for Shorts?
-5. **Give the cat the same rim/contrast treatment** (one line of code; next_0 flagged it).
+1. "Donut" = a ring-shaped loading wheel (torus + rising bars).
+2. Minimum wheel run 2.5 s (inside the spec's 2–3 s).
+3. **Cute, stylized low-poly obstacles** (changed from the photoscan default).
+4. Video: 1920×1080 at 60 fps, landscape MP4, ending in a deliberate crash about 40 s into stage 7. No vertical cut.
+5. The cat gets the same rim/contrast treatment.

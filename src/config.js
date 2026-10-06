@@ -45,6 +45,10 @@ export const BREATHER = { before: 1.0, after: 2.0 };
 export const SCORE_PER_UNIT = 2;
 export const MILESTONE = 100;
 
+// ---- Title: the loading donut runs at least `minRun` s before Play shows (spec: interactive in
+// 2–3 s), and Play never waits past `cap` s. The 3D donut gets `min3D` s on screen first. ----
+export const WHEEL = { minRun: 2.5, cap: 3.0, min3D: 1.0 };
+
 // ---- View ----
 // Minimum visible world: width grows with aspect ratio (portrait 11 → wide 18), height 5.
 export const VIEW = { minWPortrait: 11, minWWide: 18, minH: 5, catScreenX: 1.4 };
