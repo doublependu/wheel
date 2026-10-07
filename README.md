@@ -1,7 +1,7 @@
 # wheel
 single button jump game to avoid obstacles
 
-A black cat runs through the history of computer graphics *and* game audio. It starts on a loading wheel that is a little solar system: planets form, crumble and orbit a star over a black mirror, and the game makes you wait for it. Past it, the menu's photoreal "SUPER donut" gets crunched down to 1-bit pixels and beeps, then the cat earns its way back up:
+A black cat runs through the history of computer graphics *and* game audio. It starts on a loading wheel that is a ring of planets over a black mirror: one bursts into pieces, the pieces grind down to dust, the dust flows on and forms the next, at a speed that changes like a bad connection, and the game makes you wait for it. Past it, the menu's photoreal "SUPER donut" gets crunched down to 1-bit pixels and beeps, then the cat earns its way back up:
 
 | Stage | Graphics | Sound |
 |---|---|---|
@@ -36,7 +36,7 @@ claude --dangerously-skip-permissions
 | Command | What it does |
 |---|---|
 | `npm run dev` | Dev server (also on your LAN for phone testing) |
-| `npm test` | Simulation tests: jump timing window, stage clock, spawn breathers, fairness and reachability bots, song data |
+| `npm test` | Simulation tests (jump timing window, stage clock, spawn breathers, fairness and reachability bots, song data) and the loading wheel's (the hop, the dust's bookkeeping, the clock, the odds) |
 | `npm run build` | Production build + critical-path size budget check |
 | `npm run preview` | Serve the production build locally |
 | `npm run deploy` | Build and deploy to Cloudflare (warns if the working tree is dirty) |
@@ -53,7 +53,7 @@ claude --dangerously-skip-permissions
 | `?loader=skip` | Go straight to the menu |
 | `?loader=lite` | Use the CSS version of the fancy loading wheel |
 | `?loader=quiet:N` | Dev server only: N seconds of wheel before clicks can get through (default 5) |
-| `?seed=N` | Fixed obstacle layout |
+| `?seed=N` | Fixed obstacle layout (and the same loading-wheel speed changes and odds every time) |
 | `?tier=low\|medium\|high\|ultra` | Force a graphics quality tier |
 | `?webgl=1` | Force the WebGL2 backend instead of WebGPU |
 | `?hdr=0` | Disable HDR output |
@@ -65,26 +65,28 @@ claude --dangerously-skip-permissions
 
 ## Loading, on purpose
 
-The loading wheel builds two [loading-ui](https://www.loading-ui.com) spinners, [Spiral](https://www.loading-ui.com/docs/components/spiral) and [Twin Orbit](https://www.loading-ui.com/docs/components/twin-orbit), as a solar system where the physics is a bit different:
+The loading wheel starts from a [loading-ui](https://www.loading-ui.com) spinner, [Spiral](https://www.loading-ui.com/docs/components/spiral): a ring of 8 dots that grow and shrink in a wave. Here the 8 dot positions are stations, and one planet's worth of matter goes round them:
 
-- **Spiral** is a ring of 8 dots that grow and shrink in a wave. Here each dot is a planet's life: it condenses out of hot dust, matures and crumbles, and its dust (a GPU compute simulation) flies on clockwise to the planets forming ahead of it. The planets don't orbit; their matter does.
-- **Twin Orbit** is two dots circling a centre dot with CSS `ease` timing. Here a star and two twins (ice with transmission and dispersion, liquid mercury) whose orbit plane leans back and precesses. The star is the only light; tides are exaggerated, so the star bulges toward the twins and they stretch toward each other.
-- Every surface morphs (noise displacement in the vertex shader, normals from the per-pixel height). Eight planet looks share one material: lava, ocean, gas giant (sheen), crystal, pearl (iridescence), chrome, velvet and rock.
+- **A planet bursts.** Each planet is a sphere cut into 12–36 solid wedges. Its seams open and glow, it bursts, and the pieces fly forward along the ring and in toward the empty hub, tumble, cool and grind down to dust.
+- **The dust moves on.** A GPU compute simulation streams it clockwise to the next station, where it lands on a hot blob that grows with it into the next planet. Each station has its own look (lava, ocean, gas giant, crystal, pearl, chrome, velvet, rock), so the matter changes as it goes. Eight hops make a lap; then it repeats.
+- **Faint neighbours.** A tenth of the dust stays behind and trickles after the rest; another tenth runs a station ahead. So a whole planet always has a faint shade of dust on either side, the planet before it thinning out and the one to come thickening, with a thin trace of dust flowing in and out.
+- **A changing connection.** The wheel runs on its own clock, between about 0.1× and 2.3× real time: steady stretches, slowdowns, near-stalls and catch-up bursts, like a download. It differs on every visit and averages 1×, at 2 s per planet.
+- No bloom: the explosion is geometry, glowing pieces, hot dust and one light. Every surface morphs (noise displacement in the vertex shader, normals from the per-pixel height), and all eight looks share one material.
 
 The page loads in three stages:
 
 1. **Pre-load**: a flat CSS copy of Spiral paints immediately, while only the fancy wheel loads behind it (three.js, then building it, compiling its shaders and warming it up on a hidden canvas).
-2. **The fancy wheel** takes over in the same place and phase. This counts as the page having loaded (`loader:fancy`; spec: 2–3 s, 4 s at most), so it starts by 3.5 s at the latest, as a CSS version if 3D isn't ready yet. For 5 s the screen shows nothing but the wheel and its reflection, and nothing responds, while the menu, audio and sprites load behind it.
-3. After that, a click, tap or Space **may** get through: 35 % at first, more with every miss and every second, and the 3rd try always works. A miss makes the wheel stall as if the page were busy. A hit pulls everything into the star, and the menu's donut springs out of the hub.
+2. **The fancy wheel** takes over: the flat dots turn to dust where they stand, and that dust forms the first planet. This counts as the page having loaded (`loader:fancy`; spec: 2–3 s, 4 s at most), so it starts by 3.5 s at the latest, as a CSS version if 3D isn't ready yet (the 3D wheel then takes over from it mid-hop, in phase). For 5 s the screen shows nothing but the wheel and its reflection, and nothing responds, while the menu, audio and sprites load behind it.
+3. After that, a click, tap or Space **may** get through: 35 % at first, more with every miss and every second, and the 3rd try always works. A miss makes the wheel stall as if the page were busy. A hit pulls everything into the hub, and the menu's donut springs out of it.
 
-Tunables: `LOADER` and `ORBIT` in `src/config.js`. Motion: `src/loader/orbitPhysics.js`; the odds: `src/loader/gate.js` (both tested in `tests/loader.test.js`).
+Tunables: `LOADER`, `ORBIT` (the hop and its timing) and `NET` (the connection) in `src/config.js`. Motion: `src/loader/orbitPhysics.js`; the clock: `src/loader/netSpeed.js`; the odds: `src/loader/gate.js` (all tested in `tests/loader.test.js`). The CSS version: `src/loader/lite.js`.
 
 ## How it loads fast
 
 - `index.html` (≈5 KB gzipped) paints the CSS pre-loader immediately; its dots run on the compositor (Web Animations), so they keep moving while scripts load.
 - The 3D chunk (three.js and the wheel, ≈285 KB) loads first; audio and the 2D stages wait until the fancy wheel plays.
-- The wheel's shaders are kept small (one noise evaluation per shader stage, compact noise functions), because on a first visit (a cold shader cache) compile time decides when the wheel can play. The menu's donut compiles in the background while the wheel plays; its last blocking warm-up happens at the click, when the page may look busy anyway.
-- The game core (≈18 KB, with the obstacle sprite atlas inlined) runs the 1-bit stage on Canvas 2D; the 3D world loads behind the menu, and each 3D stage's shaders are compiled off-screen before it can start.
+- The wheel is one planet material, one dust simulation and a mirror, and its shaders are kept small (one noise evaluation per shader stage, compact noise functions), because on a first visit (a cold shader cache) compile time decides when the wheel can play. The menu's donut compiles in the background while the wheel plays; its last blocking warm-up happens at the click, when the page may look busy anyway.
+- The game core (≈21 KB, with the obstacle sprite atlas inlined) runs the 1-bit stage on Canvas 2D; the 3D world loads behind the menu, and each 3D stage's shaders are compiled off-screen before it can start.
 - WebGPU is used when the GPU offers it; a software (SwiftShader) adapter or a lost device falls back to WebGL2. A stage only arrives once it is ready; until then the music just keeps chilling.
 
 ## Recording a video

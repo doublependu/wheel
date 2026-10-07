@@ -1,5 +1,5 @@
 // Lazy three.js entry: WebGPU renderer (WebGL2 fallback), quality tier, the fancy loading wheel
-// (stage B), the SUPER donut on the menu and the 3D eras (5–7).
+// (stage B, on the wheel clock main.js owns), the SUPER donut on the menu and the 3D eras (5–7).
 import * as THREE from 'three/webgpu';
 import { TIERS, initialTier, Benchmark, DynamicResolution } from './quality.js';
 import { Wheel, studioEnvironment } from './wheel.js';
@@ -20,8 +20,9 @@ async function hardwareWebGPU() {
   }
 }
 
-export async function createGraphics3D({ canvas, view, dpr, params, forceWebGL = false }) {
+export async function createGraphics3D({ canvas, view, dpr, params, clock, forceWebGL = false }) {
   const g = new Graphics3D(canvas, params);
+  g.clock = clock;
   g.forceWebGL = forceWebGL;
   await g.init(view, dpr);
   return g;
@@ -79,7 +80,7 @@ class Graphics3D {
     this.warmRT = new THREE.RenderTarget(64, 64);
     this.resize(view, dpr);
     // only the loading wheel is built now; it must play as early as possible
-    this.orbit = new Orbit(this);
+    this.orbit = new Orbit(this, this.clock);
     this.orbit.resize(view.cssW, view.cssH);
     performance.mark('3d:built');
     await this.orbit.compile();
@@ -151,10 +152,6 @@ class Graphics3D {
 
   loaderHandoff(now) {
     this.orbit?.handoff(now);
-  }
-
-  loaderHitch(now, freeze) {
-    this.orbit?.hitch(now, freeze);
   }
 
   // Returns how long the collapse takes.

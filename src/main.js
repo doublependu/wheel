@@ -1,9 +1,9 @@
 // Boot, screen state machine, game loop and progressive loading.
 //
 // Screens: preload (stage A: the flat CSS Spiral while the fancy wheel loads) → loading (stage B: the
-// fancy wheel plays, which counts as "page loading done"; after LOADER.quiet s an attempt may get
-// through) → decay (the wheel collapses) → title (the menu: the donut and Play) → crunch → run ⇄
-// paused → over.
+// fancy wheel plays on its own clock, which counts as "page loading done"; after LOADER.quiet s an
+// attempt may get through) → decay (the wheel collapses) → title (the menu: the donut and Play) →
+// crunch → run ⇄ paused → over.
 import { Input } from './input.js';
 import { Hud } from './ui/hud.js';
 import { World } from './sim/world.js';
@@ -13,6 +13,8 @@ import { SIM_DT, MAX_FRAME_DT, ERA_COUNT, LOADER } from './config.js';
 import { createAutopilot, parseCrash } from './sim/autopilot.js';
 import { loadObstacleAtlas } from './render2d/obstacleAtlas.js';
 import { Gate, menuReady } from './loader/gate.js';
+import { speedPlan, WheelClock, firstStation } from './loader/netSpeed.js';
+import { Lite } from './loader/lite.js';
 import { createRng } from './sim/rng.js';
 
 const params = new URLSearchParams(location.search);
@@ -60,7 +62,13 @@ let loaderStart = 0;
 let decayUntil = 0;
 let menuAt = 0;
 let busyTimer = 0;
+let liteHeadStart = 0; // frames the CSS wheel gets before the 3D wheel's first, blocking frame
 const menuGate = new Gate({ quiet: Number.isFinite(QUIET) ? QUIET : LOADER.quiet, random: Number.isFinite(FIXED_SEED) ? createRng(FIXED_SEED + 1) : Math.random });
+// The fancy wheel's clock: it speeds up and slows down like a connection, differently on each visit.
+// The 3D wheel and its CSS stand-in both read it.
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const wheelClock = new WheelClock(speedPlan(Number.isFinite(FIXED_SEED) ? createRng(FIXED_SEED + 2) : Math.random, { reduced: REDUCED_MOTION }), { reduced: REDUCED_MOTION });
+const lite = new Lite(wheelClock);
 try {
   muted = localStorage.getItem(MUTE_KEY) === '1';
 } catch {
@@ -95,7 +103,7 @@ function prepare2DEras() {
 function load3D(forceWebGL = false) {
   if (g3dLoading) return g3dLoading;
   g3dLoading = import('./render3d/graphics3d.js')
-    .then((m) => m.createGraphics3D({ canvas: $('c3d'), view, dpr, params, forceWebGL }))
+    .then((m) => m.createGraphics3D({ canvas: $('c3d'), view, dpr, params, forceWebGL, clock: wheelClock }))
     .then((g) => {
       g.onLost = (info) => {
         if (g3d !== g || forceWebGL) return;
@@ -178,6 +186,7 @@ function beginLoading(now, mode) {
   if (screen !== 'preload') return;
   setScreen('loading');
   loaderStart = now;
+  wheelClock.start(now, firstStation(now, REDUCED_MOTION));
   menuGate.begin(now);
   performance.mark('loader:fancy', { detail: mode });
   setLoaderMode(mode, now);
@@ -188,10 +197,20 @@ function beginLoading(now, mode) {
 
 function setLoaderMode(mode, now) {
   loaderMode = mode;
-  body.classList.toggle('loader-lite', mode === 'lite');
   body.classList.toggle('loader-3d', mode === '3d');
   body.classList.toggle('show-3d', mode === '3d');
-  if (mode === '3d') g3d?.loaderHandoff(now);
+  if (mode === 'lite') {
+    body.classList.add('loader-lite');
+    lite.start();
+  } else {
+    g3d?.loaderHandoff(now);
+    // the CSS wheel fades out under the 3D one, then goes
+    setTimeout(() => {
+      if (loaderMode !== '3d') return;
+      lite.stop();
+      body.classList.remove('loader-lite');
+    }, 600);
+  }
 }
 
 function attemptMenu(now) {
@@ -210,21 +229,10 @@ function attemptMenu(now) {
   else collapse(performance.now() / 1000);
 }
 
-// A missed attempt: the wheel stalls for a moment as if the page were busy (plus however long it
-// really was busy), then catches up.
+// A missed attempt: the wheel's clock stalls for a moment as if the page were busy (plus however
+// long it really was busy), then catches up. The 3D wheel and the CSS one both follow that clock.
 function hitch(now, busy = 0) {
-  if (loaderMode === '3d') g3d?.loaderHitch(now, LOADER.hitch + busy);
-  else {
-    const anims = $('loader').getAnimations({ subtree: true });
-    for (const a of anims) a.pause();
-    setTimeout(() => {
-      for (const a of anims) {
-        a.updatePlaybackRate(1.6); // catch up again
-        a.play();
-      }
-      setTimeout(() => anims.forEach((a) => a.updatePlaybackRate(1)), 250);
-    }, LOADER.hitch * 1000);
-  }
+  wheelClock.hitch(now, LOADER.hitch + busy);
   body.classList.add('loader-busy');
   clearTimeout(busyTimer);
   busyTimer = setTimeout(() => body.classList.remove('loader-busy'), 600);
@@ -244,6 +252,7 @@ function enterMenu(now) {
   menuAt = now;
   document.title = 'Wheel';
   body.classList.remove('loader-lite', 'loader-3d', 'loader-open', 'loader-busy', 'loader-out');
+  lite.stop();
   hud.setReady('Tap or press Space to play');
   r2d.prepare(Math.min(START_ERA, 4));
   if (g3d) {
@@ -436,8 +445,16 @@ function frame(ms) {
     if (shownEra <= 4 || body.classList.contains('show-2d')) r2d.draw(world, Math.min(shownEra, 4), now, section);
     if (g3d && shownEra >= 5) g3d.renderWorld(world, shownEra, now, dt, section);
   } else if (screen === 'preload' || screen === 'loading' || screen === 'decay') {
+    // The 3D wheel's first frames block the page for a moment (they compile its pipelines). If
+    // that would run into the cap, the CSS wheel starts first, gets two frames to appear, and then
+    // keeps moving through the block (it runs on the compositor).
+    if (screen === 'preload' && g3d && !g3d.loaderFrames && now >= LOADER.cap - LOADER.warm) {
+      beginLoading(now, 'lite');
+      liteHeadStart = 2;
+    }
+    if (liteHeadStart > 0) liteHeadStart--;
     // in stage A this warms the wheel up on the hidden canvas (not needed when the CSS one is forced)
-    if (!(FORCE_LITE && g3d?.loaderFrames >= 3)) g3d?.renderLoader(now, dt);
+    else if (!(FORCE_LITE && g3d?.loaderFrames >= 3)) g3d?.renderLoader(now, dt);
     loaderTick(now);
   } else if (g3d && (screen === 'title' || screen === 'crunch')) {
     if (screen === 'title' && g3d.menuCompiled && !body.classList.contains('wheel-3d')) {
@@ -463,7 +480,7 @@ if (import.meta.env.DEV && params.has('contrast')) {
 
 // Debug handle for automated checks in development builds.
 if (import.meta.env.DEV) {
-  window.__wheel = { world, r2d, get audio() { return audio; }, get g3d() { return g3d; }, get screen() { return screen; } };
+  window.__wheel = { world, r2d, clock: wheelClock, get audio() { return audio; }, get g3d() { return g3d; }, get screen() { return screen; } };
 }
 
 // ---------- boot ----------

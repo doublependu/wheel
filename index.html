@@ -35,8 +35,10 @@
       .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
       /* The loaders. Stage A: a flat Spiral (loading-ui.com) while the fancy wheel loads. Stage B: the
-         fancy wheel (three.js, or this CSS "lite" version with Twin Orbit and a reflection). Nothing
-         else is on screen. Geometry matches src/loader/orbitPhysics.js (1 world unit = 0.34 box). */
+         fancy wheel (three.js, or its CSS stand-in "fancy-lite", built by src/loader/lite.js: one
+         coloured dot at a time, crumbs that carry it to the next station, a faint dot before and
+         after it, and a reflection). Nothing else is on screen. Geometry matches
+         src/loader/orbitPhysics.js (1 world unit = 0.34 box). */
       body.screen-preload, body.screen-loading, body.screen-decay { background: #000; cursor: wait; }
       body.screen-loading.loader-open { cursor: progress; }
       body.screen-loading.loader-open.loader-busy { cursor: wait; }
@@ -46,16 +48,21 @@
       body.loader-3d #loader { opacity: 0; }
       body.loader-3d #c3d { transition-duration: .4s; }
       .ld { position: fixed; left: 50%; top: 42%; width: var(--box); aspect-ratio: 1; translate: -50% -50%; }
-      .ld-ring i { position: absolute; width: 18.36%; aspect-ratio: 1; translate: -50% -50%; border-radius: 50%; background: #e9e9ef; scale: 0; opacity: 0; }
-      .ld-twin, .ld-mirror { display: none; }
-      body.loader-lite :is(.ld-twin, .ld-mirror) { display: block; }
-      body.loader-lite .ld-ring i { background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 50%), var(--c); }
-      .ld-twin { position: absolute; left: 50%; top: 50%; width: 8.84%; aspect-ratio: 1; translate: -50% -50%; }
-      .ld-twin b, .ld-twin i { position: absolute; inset: 0; border-radius: 50%; }
-      .ld-twin b { background: radial-gradient(circle, #fff6dc 35%, #ff9a3c); }
-      .ld-twin i { background: radial-gradient(circle at 35% 30%, #fff, var(--c) 55%); }
-      .ld-mirror { top: calc(42% + .898 * var(--box)); scale: 1 -1; opacity: .3;
+      .ld :is(i, u) { position: absolute; width: 18.36%; aspect-ratio: 1; translate: -50% -50%; border-radius: 50%; }
+      .ld-ring { transition: opacity .3s; }
+      .ld-ring i { background: #e9e9ef; scale: 0; opacity: 0; }
+      .ld-lite { position: absolute; inset: 0; opacity: 0; transition: opacity .4s; }
+      body.loader-lite .ld-ring { opacity: 0; }
+      body.loader-lite .ld-lite { opacity: 1; }
+      .ld-lite i { background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 50%), var(--c); scale: 0; }
+      .ld-lite u { background: radial-gradient(circle, var(--c) 15%, transparent 68%); opacity: 0; }
+      .ld-lite :is(s, b) { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+      .ld-lite b { opacity: 0; }
+      .ld-lite b::before { content: ''; position: absolute; left: calc(var(--box) * var(--r)); width: calc(var(--box) * .035); aspect-ratio: 1;
+        translate: -50% -50%; border-radius: 50%; background: #e9e4da; }
+      .ld-mirror { display: none; top: calc(42% + .898 * var(--box)); scale: 1 -1; opacity: .3;
         -webkit-mask: linear-gradient(to top, #000 5%, transparent 55%); mask: linear-gradient(to top, #000 5%, transparent 55%); }
+      body.loader-lite .ld-mirror { display: block; }
       body.loader-out .ld { scale: 0; rotate: 1turn; transition: scale .7s cubic-bezier(.6,0,.9,.4), rotate .7s ease-in; }
       body.loader-out .ld-mirror { scale: 0 0; }
       /* the menu fades in as the donut springs out of the hub */
@@ -157,39 +164,28 @@
       <canvas id="c2d"></canvas>
     </div>
     <div id="loader" role="status">
-      <div class="ld"><div class="ld-ring"></div><div class="ld-twin"><b></b><i style="--c:#bfeaff"></i><i style="--c:#d3d9e2"></i></div></div>
+      <div class="ld"><div class="ld-ring"></div></div>
       <div class="ld ld-mirror" aria-hidden="true"></div>
       <span class="sr-only">Loading</span>
     </div>
     <script>
-      // The loaders' dots, animated with the Web Animations API on the performance.now() clock, so the
-      // 3D wheel takes over in the same phase. Spiral: 8 dots, scale and opacity 0 → 1 → 0 over 1.5 s
-      // (easeInOut halves), dot i starting i/8 of a period later. Twin Orbit: rotate(0 → 360deg)
-      // translate(155%) with `ease`, 1 s per lap, half a lap apart. Colours: LOOKS in bodies.js.
+      // The pre-loader's dots, animated with the Web Animations API on the performance.now() clock, so
+      // the fancy wheel knows where the wave is when it takes over. Spiral: 8 dots, scale and opacity
+      // 0 → 1 → 0 over 1.5 s (easeInOut halves), dot i starting i/8 of a period later.
       (function () {
         document.title = 'Loading…';
         requestAnimationFrame(function () { performance.mark('paint:first'); }); // the pre-loader's first frame
-        var slow = matchMedia('(prefers-reduced-motion: reduce)').matches ? 2 : 1, T = 1500 * slow, io = 'cubic-bezier(.42,0,.58,1)';
-        var col = ['#ff6a2a', '#3f7fd8', '#e9b980', '#9fe6ff', '#f6e6f0', '#dfe5ee', '#d0559a', '#b0a493'];
-        var main = document.querySelector('.ld'), mirror = document.querySelector('.ld-mirror');
-        mirror.innerHTML = main.innerHTML;
-        [main, mirror].forEach(function (root) {
-          var ring = root.querySelector('.ld-ring'), h = '', i;
-          for (i = 0; i < 8; i++) {
-            var a = i * Math.PI / 4;
-            h += '<i style="left:' + (50 + 31.25 * Math.cos(a)) + '%;top:' + (50 + 31.25 * Math.sin(a)) + '%;--c:' + col[i] + '"></i>';
-          }
-          ring.innerHTML = h;
-          for (i = 0; i < 8; i++) {
-            ring.children[i].animate([{ scale: 0, opacity: 0, easing: io }, { scale: 1, opacity: 1, easing: io }, { scale: 0, opacity: 0 }],
-              { duration: T, iterations: Infinity, fill: 'backwards' }).startTime = i * T / 8;
-          }
-          var tw = root.querySelectorAll('.ld-twin i');
-          for (i = 0; i < 2; i++) {
-            tw[i].animate([{ transform: 'rotate(0deg) translate(155%)' }, { transform: 'rotate(360deg) translate(155%)' }],
-              { duration: 1000 * slow, iterations: Infinity, easing: 'ease' }).startTime = (i * 500 - 1000) * slow;
-          }
-        });
+        var T = matchMedia('(prefers-reduced-motion: reduce)').matches ? 3000 : 1500, io = 'cubic-bezier(.42,0,.58,1)';
+        var ring = document.querySelector('.ld-ring'), h = '', i;
+        for (i = 0; i < 8; i++) {
+          var a = i * Math.PI / 4;
+          h += '<i style="left:' + (50 + 31.25 * Math.cos(a)) + '%;top:' + (50 + 31.25 * Math.sin(a)) + '%"></i>';
+        }
+        ring.innerHTML = h;
+        for (i = 0; i < 8; i++) {
+          ring.children[i].animate([{ scale: 0, opacity: 0, easing: io }, { scale: 1, opacity: 1, easing: io }, { scale: 0, opacity: 0 }],
+            { duration: T, iterations: Infinity, fill: 'backwards' }).startTime = i * T / 8;
+        }
       })();
     </script>
     <div id="wheel" aria-hidden="true"><div class="spin"><div class="ring"></div><div id="bars"></div></div></div>
@@ -222,7 +218,7 @@
       <div class="box">
         <h2>Credits</h2>
         <p>Scenery, the cat's pixel art, music and sound are generated in code; the 3D models are credited below.</p>
-        <p>Loading wheel: after the <a href="https://www.loading-ui.com/docs/components/spiral" target="_blank" rel="noopener">Spiral</a> and <a href="https://www.loading-ui.com/docs/components/twin-orbit" target="_blank" rel="noopener">Twin Orbit</a> spinners from loading-ui.</p>
+        <p>Loading wheel: after the <a href="https://www.loading-ui.com/docs/components/spiral" target="_blank" rel="noopener">Spiral</a> spinner from loading-ui.</p>
         <p>3D: <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> (MIT).</p>
         <div id="credits-list"></div>
         <p>Code and game design: <a href="https://github.com/doublependu/wheel" target="_blank" rel="noopener">github.com/doublependu/wheel</a> (GPL-3.0).</p>
