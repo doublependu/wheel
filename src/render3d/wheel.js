@@ -1,8 +1,8 @@
-// The SUPER donut: the loading wheel as a studio product shot. A lacquered rainbow torus with
-// engraved segment grooves, a ring of anodized-aluminium bars that rise around it (a progress ring
-// while loading, then a travelling wave), soft studio lighting from a procedural softbox
-// environment, real shadows and a satin floor. No bloom: highlights come from the lighting.
-// On start it gets "crunched" down to 1-bit pixels.
+// The SUPER donut on the menu: a studio product shot. A lacquered rainbow torus with engraved
+// segment grooves, a ring of anodized-aluminium bars dancing in a travelling wave, soft studio
+// lighting from a procedural softbox environment, real shadows and a satin floor. No bloom:
+// highlights come from the lighting. It springs out of the hub where the loading wheel collapsed,
+// and on Play it gets "crunched" down to 1-bit pixels.
 import * as THREE from 'three/webgpu';
 import {
   pass, mrt, output, velocity, normalView, directionToColor, colorToDirection, uniform, uniformArray, screenUV, screenSize,
@@ -15,7 +15,6 @@ import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
 import { film } from 'three/addons/tsl/display/FilmNode.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { WHEEL } from '../config.js';
 
 export const RAINBOW = ['#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#00c7be', '#007aff', '#5856d6', '#af52de', '#ff2d55', '#ff5e3a'];
 
@@ -44,9 +43,30 @@ export const crunchNode = (input, amount) =>
     return vec4(keep.select(c, res), 1);
   })();
 
+// Frame a loader camera where the CSS loaders sit (index.html: centred at 42 % height in a box of
+// min(58vmin, 540px), one world unit = 0.34 of the box), so CSS ↔ 3D cross-fades line up. The
+// camera is aimed a little below the origin rather than given a view offset, because TRAA replaces
+// the view offset with its jitter. Returns the camera's distance.
+export function frameCamera(cam, w, h) {
+  cam.aspect = w / h;
+  cam.clearViewOffset();
+  const box = Math.min(0.58 * Math.min(w, h), 540);
+  const unitPx = 0.34 * box; // css px per world unit at the wheel
+  const halfTan = Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
+  const D = h / (unitPx * 2 * halfTan);
+  const cy = 0.35;
+  // the origin should land at 42 % from the top: NDC y = 0.16
+  const toOrigin = Math.atan(-cy / D);
+  const aim = toOrigin - Math.atan(0.16 * halfTan);
+  cam.position.set(0, cy, D);
+  cam.lookAt(0, cy + D * Math.tan(aim), 0);
+  cam.updateProjectionMatrix();
+  return D;
+}
+
 // A photo studio as an environment map: dark walls, a big overhead softbox, a strip light and a
 // warm bounce card. Rendered once into a PMREM, so it costs no download.
-function studioEnvironment(renderer) {
+export function studioEnvironment(renderer) {
   const env = new THREE.Scene();
   const room = new THREE.Mesh(new THREE.BoxGeometry(20, 12, 20), new THREE.MeshBasicMaterial({ color: '#16161c', side: THREE.BackSide }));
   room.position.y = 4;
@@ -76,24 +96,25 @@ export class Wheel {
     this.crunch = uniform(0);
     this.crunchStart = 0;
     this.crunchDur = 0;
-    this.targetProgress = 0;
-    this.ready = false;
+    this.enterAt = null;
     this.pointer = { x: 0, y: 0, tx: 0, ty: 0 };
     this.bars = this.t.name === 'low' ? 48 : this.t.name === 'ultra' ? 96 : 64;
     this.h = new Float32Array(this.bars).fill(0.03);
     this.v = new Float32Array(this.bars);
     this.#build();
-    window.addEventListener('pointermove', (e) => {
+    this.onPointer = (e) => {
       this.pointer.tx = (e.clientX / innerWidth - 0.5) * 2;
       this.pointer.ty = (e.clientY / innerHeight - 0.5) * 2;
-    });
+    };
+    window.addEventListener('pointermove', this.onPointer);
   }
 
   #build() {
     const { renderer, t } = this;
     const scene = (this.scene = new THREE.Scene());
-    scene.backgroundNode = mix(color('#26263a'), color('#030306'), smoothstep(0.0, 1.0, length(screenUV.sub(vec2(0.5, 0.42)).mul(vec2(1.5, 1)))));
-    scene.environment = studioEnvironment(renderer);
+    this.bgU = uniform(1); // fades the studio in from the loading wheel's black
+    scene.backgroundNode = mix(color('#26263a'), color('#030306'), smoothstep(0.0, 1.0, length(screenUV.sub(vec2(0.5, 0.42)).mul(vec2(1.5, 1))))).mul(this.bgU);
+    scene.environment = this.g.studioEnv();
     scene.environmentIntensity = 0.85;
 
     this.camera = new THREE.PerspectiveCamera(28, 1, 0.1, 80);
@@ -116,7 +137,7 @@ export class Wheel {
     ringMat.colorNode = mix(palette.element(int(segId).mod(N)), vec3(0.02), groove.mul(0.85));
     ringMat.roughnessNode = mix(float(0.3).add(smudge.mul(0.12)), float(0.75), groove);
     ringMat.clearcoatRoughnessNode = float(0.04).add(smudge.mul(0.06)).add(groove.mul(0.4));
-    this.glow = uniform(0); // lifts the lacquer a touch while loading completes
+    this.glow = uniform(0.06); // lifts the lacquer a touch
     ringMat.emissiveNode = ringMat.colorNode.mul(this.glow);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(R, TUBE, t.name === 'low' ? 32 : 48, t.name === 'low' ? 120 : 200), ringMat);
     ring.castShadow = ring.receiveShadow = t.shadows > 0;
@@ -231,28 +252,16 @@ export class Wheel {
     pipeline.outputNode = crunchNode(srgb, this.crunch);
   }
 
-  // Frame the donut where the CSS donut sits (index.html: centred at 42 % height, ring outer
-  // diameter = 0.68 × min(58vmin, 540px)), so the cross-fade lines up.
   resize(w, h) {
-    const cam = this.camera;
-    cam.aspect = w / h;
-    const box = Math.min(0.58 * Math.min(w, h), 540);
-    const unitPx = 0.34 * box; // css px per world unit at the donut
-    const D = h / (unitPx * 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2));
-    cam.position.set(0, 0.35, D);
-    cam.lookAt(0, 0, 0);
-    cam.setViewOffset(w, h, 0, (0.5 - 0.42) * h, w, h);
-    cam.updateProjectionMatrix();
-    this.camD = D;
-    if (this.focusU) this.focusU.value = D;
+    this.camD = frameCamera(this.camera, w, h);
+    if (this.focusU) this.focusU.value = this.camD;
   }
 
-  setProgress(p) {
-    this.targetProgress = p;
-  }
-
-  setReady(r) {
-    this.ready = r;
+  // Spring out of the hub (where the loading wheel just collapsed), bars rising into the wave.
+  enter(now) {
+    this.enterAt = now;
+    this.h.fill(0.02);
+    this.v.fill(0);
   }
 
   startCrunch(start, dur) {
@@ -260,22 +269,20 @@ export class Wheel {
     this.crunchDur = dur;
   }
 
-  // Spring each bar towards its target height: a progress ring while loading, then a wave.
+  // Spring each bar towards its target height: a travelling wave, all up for the crunch.
   #animateBars(now, dt) {
     const n = this.bars;
-    const fill = Math.min(this.targetProgress, now / WHEEL.minRun);
     const crunching = this.crunchDur > 0;
     const reduced = this.reduced ??= matchMedia('(prefers-reduced-motion: reduce)').matches;
     const amp = reduced ? 0.4 : 1;
+    // on entrance the wave sweeps in clockwise from 12 o'clock
+    const sweep = this.enterAt === null ? 1 : Math.min(1, (now - this.enterAt) / 0.5);
     for (let i = 0; i < n; i++) {
       const f = i / n;
       let target;
       if (crunching) target = BAR_MAX;
-      else if (!this.ready) {
-        const lit = f < fill;
-        const lead = lit && f > fill - 1.5 / n;
-        target = lit ? 0.16 + 0.05 * Math.sin(now * 5 - f * 18) * amp + (lead ? 0.18 : 0) : 0.03;
-      } else {
+      else if (f > sweep) target = 0.02;
+      else {
         const w1 = Math.sin(now * 2.6 * amp - f * Math.PI * 4);
         const w2 = Math.sin(now * 4.1 * amp + f * Math.PI * 10 + Math.sin(i * 12.9898) * 3);
         target = 0.12 + (0.17 * (w1 * 0.5 + 0.5) + 0.07 * (w2 * 0.5 + 0.5)) * amp;
@@ -288,7 +295,6 @@ export class Wheel {
       }
     }
     this.#placeBars();
-    this.glow.value = this.ready ? 0.06 : 0.02;
   }
 
   render(now, dt) {
@@ -305,11 +311,16 @@ export class Wheel {
     this.donut.rotation.y = p.x * 0.25;
     this.donut.rotation.x = -0.26 + p.y * 0.12;
     this.donut.position.y = Math.sin(now * 1.3) * 0.03;
+    // entrance: grow from a point at the hub with a little overshoot, the studio fading up behind
+    const e = this.enterAt === null ? 1 : Math.min(1, (now - this.enterAt) / 0.55);
+    this.donut.scale.setScalar(Math.max(0.001, e >= 1 ? 1 : 1 + 2.4 * (e - 1) ** 3 + 1.4 * (e - 1) ** 2));
+    this.bgU.value = e * e * (3 - 2 * e);
     this.pipeline.render();
   }
 
   dispose() {
     this.pipeline.dispose();
+    window.removeEventListener('pointermove', this.onPointer);
     this.scene.traverse((o) => {
       o.geometry?.dispose();
       o.material?.dispose();

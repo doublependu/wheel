@@ -1,4 +1,4 @@
-// Quality tiers, device hints, the wheel benchmark and dynamic resolution.
+// Quality tiers, device hints, the loading-wheel benchmark and dynamic resolution.
 export const TIERS = [
   { name: 'low', dprCap: 1, scale: 0.7, aa: 'fxaa', traa: false, motionBlur: false, dof: false, ao: false, shadows: 0, transmission: false, sparkles: 0, godrays: false, hrtf: false },
   { name: 'medium', dprCap: 1.5, scale: 0.85, aa: 'fxaa', traa: false, motionBlur: false, dof: false, ao: false, shadows: 1024, transmission: false, sparkles: 1200, godrays: false, hrtf: false },
@@ -27,7 +27,7 @@ export function initialTier(renderer, params) {
 export class Benchmark {
   constructor() {
     this.samples = [];
-    this.skip = 40;
+    this.skip = 20;
     this.done = false;
   }
 
@@ -35,7 +35,7 @@ export class Benchmark {
     if (this.done) return null;
     if (this.skip-- > 0) return null;
     this.samples.push(dtMs);
-    if (this.samples.length < 90) return null;
+    if (this.samples.length < 75) return null;
     this.done = true;
     const sorted = [...this.samples].sort((a, b) => a - b);
     const p75 = sorted[Math.floor(sorted.length * 0.75)];

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-    <meta name="theme-color" content="#0b0b12" />
+    <meta name="theme-color" content="#000000" />
     <meta name="description" content="A one-button cat runner that evolves from 1-bit pixels and beeps to HDR 3D and spatial sound." />
     <title>Wheel</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-width='8' transform='rotate(-90 16 16)'%3E%3Ccircle cx='16' cy='16' r='11' stroke='%23ff3b30' stroke-dasharray='11.52 69.11' stroke-dashoffset='0.00'/%3E%3Ccircle cx='16' cy='16' r='11' stroke='%23ffcc00' stroke-dasharray='11.52 69.11' stroke-dashoffset='-11.52'/%3E%3Ccircle cx='16' cy='16' r='11' stroke='%2334c759' stroke-dasharray='11.52 69.11' stroke-dashoffset='-23.04'/%3E%3Ccircle cx='16' cy='16' r='11' stroke='%23007aff' stroke-dasharray='11.52 69.11' stroke-dashoffset='-34.56'/%3E%3Ccircle cx='16' cy='16' r='11' stroke='%235856d6' stroke-dasharray='11.52 69.11' stroke-dashoffset='-46.08'/%3E%3Ccircle cx='16' cy='16' r='11' stroke='%23ff2d55' stroke-dasharray='11.52 69.11' stroke-dashoffset='-57.60'/%3E%3C/g%3E%3C/svg%3E" />
@@ -31,9 +31,39 @@
       body.show-2d #c2d, body.show-3d #c3d { opacity: 1; }
       body.show-3d.show-2d #c2d { opacity: 1; }
 
-      /* The CSS donut: visible at first paint, upgraded to the three.js donut when it loads.
-         Ring outer diameter = 0.68 of the box, bars from 0.357 to 0.5 (matches render3d/wheel.js). */
       :root { --box: min(58vmin, 540px); }
+      .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+      /* The loaders. Stage A: a flat Spiral (loading-ui.com) while the fancy wheel loads. Stage B: the
+         fancy wheel (three.js, or this CSS "lite" version with Twin Orbit and a reflection). Nothing
+         else is on screen. Geometry matches src/loader/orbitPhysics.js (1 world unit = 0.34 box). */
+      body.screen-preload, body.screen-loading, body.screen-decay { background: #000; cursor: wait; }
+      body.screen-loading.loader-open { cursor: progress; }
+      body.screen-loading.loader-open.loader-busy { cursor: wait; }
+      body:is(.screen-preload, .screen-loading, .screen-decay) :is(#overlay, #score, #buttons, #credits-btn, #fork, #version, #play) { visibility: hidden; }
+      #loader { position: fixed; inset: 0; pointer-events: none; transition: opacity .4s; }
+      body:not(.screen-preload, .screen-loading, .screen-decay) #loader { display: none; }
+      body.loader-3d #loader { opacity: 0; }
+      body.loader-3d #c3d { transition-duration: .4s; }
+      .ld { position: fixed; left: 50%; top: 42%; width: var(--box); aspect-ratio: 1; translate: -50% -50%; }
+      .ld-ring i { position: absolute; width: 18.36%; aspect-ratio: 1; translate: -50% -50%; border-radius: 50%; background: #e9e9ef; scale: 0; opacity: 0; }
+      .ld-twin, .ld-mirror { display: none; }
+      body.loader-lite :is(.ld-twin, .ld-mirror) { display: block; }
+      body.loader-lite .ld-ring i { background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 50%), var(--c); }
+      .ld-twin { position: absolute; left: 50%; top: 50%; width: 8.84%; aspect-ratio: 1; translate: -50% -50%; }
+      .ld-twin b, .ld-twin i { position: absolute; inset: 0; border-radius: 50%; }
+      .ld-twin b { background: radial-gradient(circle, #fff6dc 35%, #ff9a3c); }
+      .ld-twin i { background: radial-gradient(circle at 35% 30%, #fff, var(--c) 55%); }
+      .ld-mirror { top: calc(42% + .898 * var(--box)); scale: 1 -1; opacity: .3;
+        -webkit-mask: linear-gradient(to top, #000 5%, transparent 55%); mask: linear-gradient(to top, #000 5%, transparent 55%); }
+      body.loader-out .ld { scale: 0; rotate: 1turn; transition: scale .7s cubic-bezier(.6,0,.9,.4), rotate .7s ease-in; }
+      body.loader-out .ld-mirror { scale: 0 0; }
+      /* the menu fades in as the donut springs out of the hub */
+      body.screen-title :is(#overlay, #fork, #version, #buttons, #credits-btn) { animation: menu-in .45s .1s both; }
+      @keyframes menu-in { from { opacity: 0; } }
+
+      /* The CSS donut: the menu's fallback without 3D, upgraded to the three.js donut when it loads.
+         Ring outer diameter = 0.68 of the box, bars from 0.357 to 0.5 (matches render3d/wheel.js). */
       #wheel { position: fixed; left: 50%; top: 42%; width: var(--box); aspect-ratio: 1; translate: -50% -50%;
         transition: opacity .6s, scale .6s; pointer-events: none; }
       #wheel .spin { position: absolute; inset: 0; animation: spin 4.5s linear infinite; }
@@ -121,11 +151,47 @@
       body.screen-title { --fg: #f2f2f2; --fg-dim: rgba(242,242,242,.55); }
     </style>
   </head>
-  <body class="screen-title">
+  <body class="screen-preload">
     <div id="stage">
       <canvas id="c3d"></canvas>
       <canvas id="c2d"></canvas>
     </div>
+    <div id="loader" role="status">
+      <div class="ld"><div class="ld-ring"></div><div class="ld-twin"><b></b><i style="--c:#bfeaff"></i><i style="--c:#d3d9e2"></i></div></div>
+      <div class="ld ld-mirror" aria-hidden="true"></div>
+      <span class="sr-only">Loading</span>
+    </div>
+    <script>
+      // The loaders' dots, animated with the Web Animations API on the performance.now() clock, so the
+      // 3D wheel takes over in the same phase. Spiral: 8 dots, scale and opacity 0 → 1 → 0 over 1.5 s
+      // (easeInOut halves), dot i starting i/8 of a period later. Twin Orbit: rotate(0 → 360deg)
+      // translate(155%) with `ease`, 1 s per lap, half a lap apart. Colours: LOOKS in bodies.js.
+      (function () {
+        document.title = 'Loading…';
+        requestAnimationFrame(function () { performance.mark('paint:first'); }); // the pre-loader's first frame
+        var slow = matchMedia('(prefers-reduced-motion: reduce)').matches ? 2 : 1, T = 1500 * slow, io = 'cubic-bezier(.42,0,.58,1)';
+        var col = ['#ff6a2a', '#3f7fd8', '#e9b980', '#9fe6ff', '#f6e6f0', '#dfe5ee', '#d0559a', '#b0a493'];
+        var main = document.querySelector('.ld'), mirror = document.querySelector('.ld-mirror');
+        mirror.innerHTML = main.innerHTML;
+        [main, mirror].forEach(function (root) {
+          var ring = root.querySelector('.ld-ring'), h = '', i;
+          for (i = 0; i < 8; i++) {
+            var a = i * Math.PI / 4;
+            h += '<i style="left:' + (50 + 31.25 * Math.cos(a)) + '%;top:' + (50 + 31.25 * Math.sin(a)) + '%;--c:' + col[i] + '"></i>';
+          }
+          ring.innerHTML = h;
+          for (i = 0; i < 8; i++) {
+            ring.children[i].animate([{ scale: 0, opacity: 0, easing: io }, { scale: 1, opacity: 1, easing: io }, { scale: 0, opacity: 0 }],
+              { duration: T, iterations: Infinity, fill: 'backwards' }).startTime = i * T / 8;
+          }
+          var tw = root.querySelectorAll('.ld-twin i');
+          for (i = 0; i < 2; i++) {
+            tw[i].animate([{ transform: 'rotate(0deg) translate(155%)' }, { transform: 'rotate(360deg) translate(155%)' }],
+              { duration: 1000 * slow, iterations: Infinity, easing: 'ease' }).startTime = (i * 500 - 1000) * slow;
+          }
+        });
+      })();
+    </script>
     <div id="wheel" aria-hidden="true"><div class="spin"><div class="ring"></div><div id="bars"></div></div></div>
     <script>
       // 48 bars, coloured like the ring segment they stand on
@@ -156,6 +222,7 @@
       <div class="box">
         <h2>Credits</h2>
         <p>Scenery, the cat's pixel art, music and sound are generated in code; the 3D models are credited below.</p>
+        <p>Loading wheel: after the <a href="https://www.loading-ui.com/docs/components/spiral" target="_blank" rel="noopener">Spiral</a> and <a href="https://www.loading-ui.com/docs/components/twin-orbit" target="_blank" rel="noopener">Twin Orbit</a> spinners from loading-ui.</p>
         <p>3D: <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> (MIT).</p>
         <div id="credits-list"></div>
         <p>Code and game design: <a href="https://github.com/doublependu/wheel" target="_blank" rel="noopener">github.com/doublependu/wheel</a> (GPL-3.0).</p>

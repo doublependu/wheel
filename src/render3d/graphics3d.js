@@ -1,8 +1,9 @@
-// Lazy three.js entry: WebGPU renderer (WebGL2 fallback), quality tier, the SUPER wheel on the
-// title screen and the 3D eras (5–7).
+// Lazy three.js entry: WebGPU renderer (WebGL2 fallback), quality tier, the fancy loading wheel
+// (stage B), the SUPER donut on the menu and the 3D eras (5–7).
 import * as THREE from 'three/webgpu';
 import { TIERS, initialTier, Benchmark, DynamicResolution } from './quality.js';
-import { Wheel } from './wheel.js';
+import { Wheel, studioEnvironment } from './wheel.js';
+import { Orbit } from './orbit.js';
 
 // A WebGPU adapter worth using: Chrome on Linux without Vulkan hands out SwiftShader (the CPU),
 // which is far slower than WebGL2 on the real GPU.
@@ -32,8 +33,11 @@ class Graphics3D {
     this.params = params;
     this.world3d = null;
     this.worldLoading = null;
-    this.onWheelVisible = null;
-    this.wheelFrames = 0;
+    this.onLoaderVisible = null;
+    this.loaderFrames = 0;
+    this.menuBuilding = null;
+    this.menuCompiled = false;
+    this.menuReady = false;
     this.credits = [];
   }
 
@@ -47,7 +51,9 @@ class Graphics3D {
       outputType: wantHdr ? THREE.HalfFloatType : undefined,
       forceWebGL: !webgpu,
     });
+    performance.mark('3d:module');
     await renderer.init();
+    performance.mark('3d:init');
     this.renderer = renderer;
     // A lost WebGPU device (e.g. a hybrid-GPU laptop whose discrete GPU can't share frames with the
     // display GPU) is reported once; main.js then rebuilds the 3D view on WebGL2.
@@ -70,9 +76,27 @@ class Graphics3D {
     this.bench = forced ? null : new Benchmark();
     this.drs = new DynamicResolution(0.5, 1);
     this.dpr = dpr;
+    this.warmRT = new THREE.RenderTarget(64, 64);
     this.resize(view, dpr);
-    this.wheel = new Wheel(this);
-    this.wheel.resize(view.cssW, view.cssH);
+    // only the loading wheel is built now; it must play as early as possible
+    this.orbit = new Orbit(this);
+    this.orbit.resize(view.cssW, view.cssH);
+    performance.mark('3d:built');
+    await this.orbit.compile();
+    performance.mark('3d:compiled');
+  }
+
+  // Compile a scene's materials (and compute shaders) in the background, without blocking. Some
+  // variants (multiple render targets, shadows, reflections) still compile at the first real render.
+  async compile(scene, camera, computeNodes = []) {
+    const jobs = [this.renderer.compileAsync(scene, camera)];
+    if (computeNodes.length) jobs.push(this.renderer.compileComputeAsync(computeNodes));
+    await Promise.all(jobs.map((j) => j.catch(() => {}))); // an optimisation only
+  }
+
+  // The procedural photo studio, shared by the loading wheel and the donut.
+  studioEnv() {
+    return (this.env ??= studioEnvironment(this.renderer));
   }
 
   // ?fx=nodof,nomb,notraa,noao,nogodrays switches single effects off on any tier (debugging).
@@ -95,6 +119,7 @@ class Graphics3D {
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(view.cssW, view.cssH, false);
     this.wheel?.resize(view.cssW, view.cssH);
+    this.orbit?.resize(view.cssW, view.cssH);
     this.world3d?.resize(view);
   }
 
@@ -102,15 +127,81 @@ class Graphics3D {
     if (tier === this.tier) return;
     this.tier = tier;
     this.tierSettings = this.#withFx(TIERS[tier]);
-    // Only the resolution changes on screen: the donut keeps the features it was built with, so a
-    // tier change while someone watches the title doesn't pop. The 3D world uses the new tier.
+    // Only the resolution changes on screen: the loading wheel (and a donut already built) keep the
+    // features they were built with, so nothing pops. The donut and the 3D world use the new tier.
     this.resize(this.view, this.dpr);
     this.world3d?.setTier(this.tierSettings);
   }
 
-  // ---------- title wheel ----------
-  showWheel() {
+  // ---------- the loading wheel (stage B) ----------
+  renderLoader(now, dt) {
+    if (!this.orbit) return;
+    this.orbit.render(now);
+    this.loaderFrames++;
+    if (this.loaderFrames <= 3) performance.mark(`3d:frame${this.loaderFrames}`);
+    // three frames on the still-hidden canvas warm everything up before it may take over
+    if (this.loaderFrames === 3) {
+      this.loaderShownAt = now;
+      this.onLoaderVisible?.();
+    }
+    if (this.loaderFrames > 3) this.#benchStep(dt);
+    // the menu's donut is built once the benchmark has settled the tier, and not during the hand-off
+    if (this.loaderFrames > 3 && !this.bench && now - this.loaderShownAt > 1.2) this.buildMenu();
+  }
+
+  loaderHandoff(now) {
+    this.orbit?.handoff(now);
+  }
+
+  loaderHitch(now, freeze) {
+    this.orbit?.hitch(now, freeze);
+  }
+
+  // Returns how long the collapse takes.
+  loaderCollapse(now) {
+    return this.orbit ? this.orbit.collapse(now) : 0;
+  }
+
+  disposeLoader() {
+    this.orbit?.dispose();
+    this.orbit = null;
+  }
+
+  // ---------- the menu's donut ----------
+  // Built and compiled in the background while the loading wheel plays (menuCompiled). Its first
+  // render still compiles a few pipeline variants synchronously, which would freeze the wheel; that
+  // warm-up waits for a moment when the page may look busy anyway (warmMenu).
+  buildMenu() {
+    this.menuBuilding ??= (async () => {
+      performance.mark('3d:menu-start');
+      const w = new Wheel(this);
+      w.resize(this.view.cssW, this.view.cssH);
+      await this.compile(w.scene, w.camera);
+      this.wheel = w;
+      this.menuCompiled = true;
+      performance.mark('menu:ready');
+    })().catch((e) => {
+      console.warn('menu donut unavailable', e);
+      this.menuFailed = true;
+    });
+    return this.menuBuilding;
+  }
+
+  // Render the donut once off-screen (blocking). Returns how long it took, in seconds.
+  warmMenu() {
+    if (!this.menuCompiled || this.menuReady) return 0;
+    const t0 = performance.now();
+    this.renderer.setRenderTarget(this.warmRT);
+    this.wheel.pipeline.render();
+    this.renderer.setRenderTarget(null);
+    this.menuReady = true;
+    performance.mark('3d:menu-warm');
+    return (performance.now() - t0) / 1000;
+  }
+
+  showWheel(now) {
     this.wheelHidden = false;
+    this.wheel?.enter(now);
   }
 
   hideWheel() {
@@ -126,24 +217,17 @@ class Graphics3D {
     this.world3d?.setCrunch(k);
   }
 
-  setLoadProgress(p) {
-    this.wheel?.setProgress(p);
-  }
-
-  setReady(r) {
-    this.wheel?.setReady(r);
-  }
-
   renderWheel(now, dt) {
     if (this.wheelHidden || !this.wheel) return;
     this.wheel.render(now, dt);
-    this.wheelFrames++;
-    if (this.wheelFrames === 3) this.onWheelVisible?.();
-    if (this.bench) {
-      const step = this.bench.add(dt * 1000);
-      if (step) this.#setTier(Math.max(0, Math.min(TIERS.length - 1, this.tier + step)));
-      if (this.bench.done) this.bench = null;
-    }
+    this.#benchStep(dt); // when the loader was skipped (?loader=skip)
+  }
+
+  #benchStep(dt) {
+    if (!this.bench) return;
+    const step = this.bench.add(dt * 1000);
+    if (step) this.#setTier(Math.max(0, Math.min(TIERS.length - 1, this.tier + step)));
+    if (this.bench.done) this.bench = null;
   }
 
   // ---------- 3D eras ----------

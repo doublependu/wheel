@@ -1,12 +1,19 @@
 // Boot, screen state machine, game loop and progressive loading.
+//
+// Screens: preload (stage A: the flat CSS Spiral while the fancy wheel loads) → loading (stage B: the
+// fancy wheel plays, which counts as "page loading done"; after LOADER.quiet s an attempt may get
+// through) → decay (the wheel collapses) → title (the menu: the donut and Play) → crunch → run ⇄
+// paused → over.
 import { Input } from './input.js';
 import { Hud } from './ui/hud.js';
 import { World } from './sim/world.js';
 import { Renderer2D } from './render2d/renderer2d.js';
 import { computeView } from './view.js';
-import { SIM_DT, MAX_FRAME_DT, ERA_COUNT, WHEEL } from './config.js';
+import { SIM_DT, MAX_FRAME_DT, ERA_COUNT, LOADER } from './config.js';
 import { createAutopilot, parseCrash } from './sim/autopilot.js';
 import { loadObstacleAtlas } from './render2d/obstacleAtlas.js';
+import { Gate, menuReady } from './loader/gate.js';
+import { createRng } from './sim/rng.js';
 
 const params = new URLSearchParams(location.search);
 const intParam = (k) => (params.has(k) ? parseInt(params.get(k), 10) : NaN);
@@ -16,6 +23,12 @@ const AUTOPILOT = params.has('autopilot');
 const CRASH = parseCrash(params.get('crash')); // autopilot: when to stop jumping (recordings)
 const TIMESCALE = import.meta.env.DEV && params.has('timescale') ? Number(params.get('timescale')) || 1 : 1;
 const MUTE_KEY = 'wheel.muted';
+// ?loader=skip goes straight to the menu (so do ?era= and ?contrast); ?loader=lite forces the CSS
+// fancy wheel; ?loader=quiet:N shortens the quiet period (dev server only).
+const LOADER_PARAM = params.get('loader') ?? '';
+const SKIP_LOADER = LOADER_PARAM === 'skip' || params.has('era') || params.has('contrast');
+const FORCE_LITE = LOADER_PARAM === 'lite';
+const QUIET = import.meta.env.DEV && LOADER_PARAM.startsWith('quiet:') ? Number(LOADER_PARAM.slice(6)) : LOADER.quiet;
 
 const $ = (id) => document.getElementById(id);
 const body = document.body;
@@ -25,7 +38,7 @@ const r2d = new Renderer2D($('c2d'));
 
 let view = null;
 let dpr = 1;
-let screen = 'title';
+let screen = 'preload';
 let audioCtx = null; // created inside the first user gesture
 let audio = null; // lazy audio engine
 let g3d = null; // lazy three.js graphics
@@ -38,12 +51,16 @@ let last = performance.now() / 1000;
 let acc = 0;
 let autopilot = null;
 let muted = false;
-// title: Play shows once the donut has run a while (see WHEEL in config.js)
-let playShown = false;
 let atlasDone = false;
 let pendingAtlas = null;
-let wheel3dAt = 0;
 let g3dFailed = false;
+// the loaders
+let loaderMode = null; // stage B: '3d' (the three.js wheel) or 'lite' (CSS)
+let loaderStart = 0;
+let decayUntil = 0;
+let menuAt = 0;
+let busyTimer = 0;
+const menuGate = new Gate({ quiet: Number.isFinite(QUIET) ? QUIET : LOADER.quiet, random: Number.isFinite(FIXED_SEED) ? createRng(FIXED_SEED + 1) : Math.random });
 try {
   muted = localStorage.getItem(MUTE_KEY) === '1';
 } catch {
@@ -68,7 +85,7 @@ resize();
 // ---------- idle work queue (progressive loading) ----------
 const idle = window.requestIdleCallback ? (fn) => requestIdleCallback(fn, { timeout: 500 }) : (fn) => setTimeout(fn, 30);
 function prepare2DEras() {
-  const next = [2, 3, 4].find((e) => !r2d.isReady(e));
+  const next = [1, 2, 3, 4].find((e) => !r2d.isReady(e));
   if (next) idle(() => {
     r2d.prepare(next);
     prepare2DEras();
@@ -80,7 +97,6 @@ function load3D(forceWebGL = false) {
   g3dLoading = import('./render3d/graphics3d.js')
     .then((m) => m.createGraphics3D({ canvas: $('c3d'), view, dpr, params, forceWebGL }))
     .then((g) => {
-      g3d = g;
       g.onLost = (info) => {
         if (g3d !== g || forceWebGL) return;
         console.warn('WebGPU device lost, switching to WebGL2:', info.message);
@@ -88,8 +104,8 @@ function load3D(forceWebGL = false) {
         const fresh = document.createElement('canvas');
         fresh.id = 'c3d';
         $('c3d').replaceWith(fresh);
-        body.classList.remove('wheel-3d');
-        wheel3dAt = 0;
+        body.classList.remove('wheel-3d', 'show-3d');
+        if (screen === 'loading') setLoaderMode('lite', performance.now() / 1000);
         g3d = null;
         g3dLoading = null;
         load3D(true);
@@ -98,17 +114,20 @@ function load3D(forceWebGL = false) {
         g.onLost(g.lost);
         return null;
       }
-      if (screen === 'title') {
-        g3d.showWheel();
-        g3d.setReady(playShown);
-        body.classList.add('show-3d');
-        g3d.onWheelVisible = () => {
-          body.classList.add('wheel-3d');
-          wheel3dAt = performance.now() / 1000;
-          performance.mark('wheel:3d');
-        };
+      // after three warm-up frames on the hidden canvas the fancy wheel may take over
+      g.onLoaderVisible = () => {
+        const now = performance.now() / 1000;
+        if (screen === 'preload' && !FORCE_LITE) beginLoading(now, '3d');
+        else if (screen === 'loading' && loaderMode === 'lite' && !FORCE_LITE) setLoaderMode('3d', now);
+      };
+      g3d = g;
+      performance.mark('3d:backend', { detail: `${g.backendName} ${g.tierSettings.name}` });
+      if (screen === 'title' || SKIP_LOADER) {
+        // the loader was skipped or is already over: straight to the menu's donut
+        g.disposeLoader();
+        g.buildMenu();
+        g.prepareWorld().then(() => hud.setCredits(g.credits ?? []));
       }
-      g3d.prepareWorld().then(() => hud.setCredits(g3d.credits ?? []));
       return g;
     })
     .catch((err) => {
@@ -151,6 +170,99 @@ function unlockAudio() {
 function setScreen(name) {
   screen = name;
   hud.setScreen(name);
+}
+
+// ---------- the loaders ----------
+// Stage B: the fancy wheel plays. This is "page loading done"; everything else loads behind it.
+function beginLoading(now, mode) {
+  if (screen !== 'preload') return;
+  setScreen('loading');
+  loaderStart = now;
+  menuGate.begin(now);
+  performance.mark('loader:fancy', { detail: mode });
+  setLoaderMode(mode, now);
+  // the rest of the page, now that it no longer competes with the wheel
+  loadAudio().catch((e) => console.warn('audio unavailable', e));
+  prepare2DEras();
+}
+
+function setLoaderMode(mode, now) {
+  loaderMode = mode;
+  body.classList.toggle('loader-lite', mode === 'lite');
+  body.classList.toggle('loader-3d', mode === '3d');
+  body.classList.toggle('show-3d', mode === '3d');
+  if (mode === '3d') g3d?.loaderHandoff(now);
+}
+
+function attemptMenu(now) {
+  const ready = menuReady({
+    atlas: atlasDone,
+    donut: !!g3d?.menuCompiled,
+    threeD: !g3dFailed && !g3d?.menuFailed,
+    sinceStart: now - loaderStart,
+  });
+  const result = menuGate.attempt(now, ready);
+  if (result === 'ignored' || result === 'merged') return;
+  // The donut's last blocking warm-up happens here, where a busy moment is expected anyway: inside
+  // the hitch of a miss, or just before the collapse of a hit.
+  const busy = g3d?.warmMenu() ?? 0;
+  if (result === 'miss') hitch(now, busy);
+  else collapse(performance.now() / 1000);
+}
+
+// A missed attempt: the wheel stalls for a moment as if the page were busy (plus however long it
+// really was busy), then catches up.
+function hitch(now, busy = 0) {
+  if (loaderMode === '3d') g3d?.loaderHitch(now, LOADER.hitch + busy);
+  else {
+    const anims = $('loader').getAnimations({ subtree: true });
+    for (const a of anims) a.pause();
+    setTimeout(() => {
+      for (const a of anims) {
+        a.updatePlaybackRate(1.6); // catch up again
+        a.play();
+      }
+      setTimeout(() => anims.forEach((a) => a.updatePlaybackRate(1)), 250);
+    }, LOADER.hitch * 1000);
+  }
+  body.classList.add('loader-busy');
+  clearTimeout(busyTimer);
+  busyTimer = setTimeout(() => body.classList.remove('loader-busy'), 600);
+}
+
+// A hit: everything spirals into the hub, then the menu.
+function collapse(now) {
+  setScreen('decay');
+  const dur = loaderMode === '3d' && g3d ? g3d.loaderCollapse(now) : LOADER.decay;
+  body.classList.add('loader-out');
+  decayUntil = now + dur;
+  performance.mark('loader:hit');
+}
+
+function enterMenu(now) {
+  setScreen('title');
+  menuAt = now;
+  document.title = 'Wheel';
+  body.classList.remove('loader-lite', 'loader-3d', 'loader-open', 'loader-busy', 'loader-out');
+  hud.setReady('Tap or press Space to play');
+  r2d.prepare(Math.min(START_ERA, 4));
+  if (g3d) {
+    g3d.disposeLoader();
+    g3d.warmMenu();
+    if (g3d.menuReady) showDonut(now);
+    else {
+      body.classList.remove('show-3d');
+      g3d.buildMenu();
+    }
+    g3d.prepareWorld().then(() => hud.setCredits(g3d?.credits ?? []));
+  } else body.classList.remove('show-3d');
+  performance.mark('menu');
+}
+
+// The 3D donut springs out of the hub (or replaces the CSS donut once it is ready).
+function showDonut(now) {
+  g3d.showWheel(now);
+  body.classList.add('show-3d', 'wheel-3d');
 }
 
 function startRun(now) {
@@ -214,11 +326,14 @@ function gameOver(now) {
 
 input.onPress = () => {
   const now = performance.now() / 1000;
-  unlockAudio();
-  if (screen === 'title' && body.classList.contains('ready')) {
+  unlockAudio(); // silent: nothing plays before the run
+  if (screen === 'preload' || screen === 'loading' || screen === 'decay') {
+    input.clear();
+    if (screen === 'loading') attemptMenu(now);
+  } else if (screen === 'title' && body.classList.contains('ready') && now - menuAt > 0.35) {
     input.clear();
     if (START_ERA >= 5 && !g3d?.isReady(START_ERA)) return;
-    crunchUntil = now + (g3d ? 1.1 : 0.6);
+    crunchUntil = now + (g3d?.wheel && !g3d.wheelHidden ? 1.1 : 0.6);
     g3d?.crunch(now, crunchUntil - now);
     audio?.crunch(crunchUntil - now);
     body.classList.add('crunch');
@@ -266,28 +381,6 @@ document.addEventListener('visibilitychange', () => {
 // Hands-free runs (recordings) keep going when another window takes focus.
 window.addEventListener('blur', () => AUTOPILOT || pause());
 
-// Title donut progress: core, obstacle sprites, audio, 3D donut, 3D world.
-function loadProgress() {
-  let p = 0.2;
-  if (atlasDone) p += 0.2;
-  if (audio) p += 0.2;
-  if (g3d || g3dFailed) p += 0.2;
-  if (g3d?.isReady(7) || g3dFailed) p += 0.2;
-  return p;
-}
-
-// Play appears after the donut has run for WHEEL.minRun s, the obstacle sprites are in and the
-// 3D donut has been on screen for WHEEL.min3D s; never later than WHEEL.cap s.
-function checkPlay(now) {
-  if (playShown) return;
-  const donutOk = g3dFailed || (wheel3dAt > 0 && now - wheel3dAt >= WHEEL.min3D);
-  if (now < WHEEL.cap && !(now >= WHEEL.minRun && atlasDone && donutOk)) return;
-  playShown = true;
-  hud.setReady('Tap or press Space to play');
-  g3d?.setReady(true);
-  performance.mark('wheel:interactive');
-}
-
 // ---------- loop ----------
 function handleEvents(now) {
   for (const e of world.consumeEvents()) {
@@ -295,6 +388,16 @@ function handleEvents(now) {
     else if (e.type === 'hit') gameOver(now);
     audio?.event(e, world);
   }
+}
+
+function loaderTick(now) {
+  // stage B starts by LOADER.cap at the latest: the CSS fancy-lite wheel if 3D isn't warm yet
+  if (screen === 'preload' && (now >= LOADER.cap || g3dFailed || FORCE_LITE)) beginLoading(now, 'lite');
+  if (screen === 'loading' && menuGate.isOpen(now) && !body.classList.contains('loader-open')) {
+    body.classList.add('loader-open');
+    performance.mark('loader:open');
+  }
+  if (screen === 'decay' && now >= decayUntil) enterMenu(now);
 }
 
 function frame(ms) {
@@ -332,11 +435,17 @@ function frame(ms) {
     const section = world.section;
     if (shownEra <= 4 || body.classList.contains('show-2d')) r2d.draw(world, Math.min(shownEra, 4), now, section);
     if (g3d && shownEra >= 5) g3d.renderWorld(world, shownEra, now, dt, section);
+  } else if (screen === 'preload' || screen === 'loading' || screen === 'decay') {
+    // in stage A this warms the wheel up on the hidden canvas (not needed when the CSS one is forced)
+    if (!(FORCE_LITE && g3d?.loaderFrames >= 3)) g3d?.renderLoader(now, dt);
+    loaderTick(now);
   } else if (g3d && (screen === 'title' || screen === 'crunch')) {
-    g3d.setLoadProgress(loadProgress());
+    if (screen === 'title' && g3d.menuCompiled && !body.classList.contains('wheel-3d')) {
+      g3d.warmMenu();
+      showDonut(now);
+    }
     g3d.renderWheel(now, dt);
   }
-  if (screen === 'title') checkPlay(performance.now() / 1000);
   audio?.update(world, screen, now);
   requestAnimationFrame(frame);
 }
@@ -358,7 +467,8 @@ if (import.meta.env.DEV) {
 }
 
 // ---------- boot ----------
-r2d.prepare(Math.min(START_ERA, 4));
+// Stage A: only the fancy wheel loads (three.js, build, compile, warm-up); the rest waits for stage B.
+load3D();
 loadObstacleAtlas()
   .then((atlas) => {
     // never swap sprites under a running game; the next run picks them up
@@ -367,9 +477,9 @@ loadObstacleAtlas()
   })
   .catch((e) => console.warn('obstacle sprites unavailable, using the procedural ones', e))
   .finally(() => (atlasDone = true));
-requestAnimationFrame(frame);
-// Progressive loading after first paint: audio core, then three.js for the wheel and 3D eras.
-setTimeout(() => {
+if (SKIP_LOADER) {
+  enterMenu(performance.now() / 1000);
   loadAudio().catch((e) => console.warn('audio unavailable', e));
-  load3D();
-}, 0);
+  prepare2DEras();
+}
+requestAnimationFrame(frame);

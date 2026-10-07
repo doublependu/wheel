@@ -1,4 +1,4 @@
-// DOM HUD and screen overlays (title, pause, game over) plus credits.
+// DOM HUD and screen overlays (loaders, title, pause, game over) plus credits.
 const $ = (id) => document.getElementById(id);
 
 const HI_KEY = 'wheel.hi';
@@ -20,6 +20,7 @@ export function saveHiScore(v) {
 }
 
 const pad = (n) => String(n).padStart(5, '0');
+const SCREENS = ['preload', 'loading', 'decay', 'title', 'run', 'paused', 'over'];
 
 export class Hud {
   constructor() {
@@ -37,7 +38,7 @@ export class Hud {
   }
 
   setScreen(name) {
-    this.body.classList.remove('screen-title', 'screen-run', 'screen-paused', 'screen-over');
+    for (const s of SCREENS) this.body.classList.remove(`screen-${s}`);
     this.body.classList.add(`screen-${name}`);
     if (name === 'paused') {
       this.title.textContent = 'PAUSED';

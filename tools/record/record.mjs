@@ -5,7 +5,9 @@
 //                     [--idle 3] [--tail 5] [--out recordings] [--no-build] [--gpu default|nvidia]
 //                     [--codec h264|vp9|vp8]
 //
-// A full-screen Chrome window shows the game for the length of the run (≈ 3½ min); the game
+// The video opens on the loaders (the flat Spiral, then the fancy wheel for its 5 s and a few clicks
+// until the menu comes out). A full-screen Chrome window shows the game for the length of the run
+// (≈ 3½ min); the game
 // keeps running if another window takes focus. Best quality when the screen has at least WxH
 // device pixels at 16:9. Output: recordings/wheel-<version>-<date>.mp4 plus a .json with frame-time
 // stats per stage and a contact sheet with one still per stage.
@@ -97,13 +99,13 @@ await page.waitForFunction(() => window.__recordInfo, null, { timeout: 15000 });
 const info = await page.evaluate(() => window.__recordInfo);
 log('capturing', info.mimeType, `${info.settings.width}x${info.settings.height}@${info.settings.frameRate}`, 'game area', JSON.stringify(info.crop), 'audio tracks', info.audio);
 
-// ---- the game frame: wait for Play, log frame times and stage changes ----
+// ---- the game frame: log frame times and stage changes from the start ----
 let game = null;
 for (let i = 0; i < 100 && !game; i++) {
   game = page.frames().find((f) => f.url().includes('autopilot='));
   if (!game) await page.waitForTimeout(100);
 }
-await game.waitForFunction(() => document.body.classList.contains('ready'), null, { timeout: 30000 });
+await game.waitForFunction(() => document.body?.className, null, { timeout: 30000 });
 await game.evaluate(() => {
   const L = (window.__rec = { events: [], dts: {}, last: performance.now() });
   let key = '';
@@ -127,7 +129,19 @@ const adapter = await game.evaluate(async () => {
   return a?.info ? `${a.info.vendor} ${a.info.architecture}`.trim() : 'none';
 });
 log('WebGPU adapter:', adapter);
-log(`title is ready; letting the donut run ${IDLE}s, then Play`);
+// ---- the loaders: the fancy wheel plays for 5 s, then click like a person until the menu shows ----
+await game.waitForFunction(() => document.body.classList.contains('loader-open'), null, { timeout: 30000 });
+const isScreen = (name) => game.evaluate((n) => document.body.classList.contains(`screen-${n}`), name);
+let attempts = 0;
+while (!(await isScreen('title'))) {
+  await game.waitForTimeout(600 + Math.random() * 700);
+  if (await isScreen('loading')) {
+    await game.click('body');
+    attempts++;
+  }
+}
+log(`the menu came out on attempt ${attempts}; letting the donut run ${IDLE}s, then Play`);
+await game.waitForFunction(() => document.body.classList.contains('ready'), null, { timeout: 10000 });
 await game.waitForTimeout(IDLE * 1000);
 await game.click('#play');
 log('playing…');
@@ -174,8 +188,13 @@ for (const e of rec.events) {
 }
 const over = rec.events.find((e) => e.screen === 'over');
 if (over) stills.push({ era: 'over', t: (over.wall - wallStart) / 1000 + 2 });
-const title = rec.events.find((e) => e.screen === 'title');
-if (title) stills.unshift({ era: 'title', t: 2.8 });
+// the loaders and the menu: the flat pre-loader, the fancy wheel, the donut
+const at = (screen, dt) => {
+  const e = rec.events.find((x) => x.screen === screen);
+  return e ? (e.wall - wallStart) / 1000 + dt : null;
+};
+const lead = [['preload', at('preload', 0.3)], ['wheel', at('loading', 2.5)], ['menu', at('title', 0.5)]].filter(([, t]) => t !== null);
+stills.unshift(...lead.map(([era, t]) => ({ era, t })));
 const duration = Number(JSON.parse(probe).format?.duration ?? 0);
 const tiles = [];
 for (const s of stills) {
@@ -189,7 +208,7 @@ if (tiles.length) {
   for (const t of tiles) rmSync(t);
 }
 const lastEra = Math.max(...rec.events.map((e) => e.era));
-const report = { file: `${base}.mp4`, capture: info, adapter, tier: TIER, seed: SEED, crash: CRASH, gpu: GPU, frameTimesMs: stats, reachedStage: lastEra, probe: JSON.parse(probe), loudness: summary.trim(), events: rec.events.map((e) => ({ ...e, t: +((e.wall - wallStart) / 1000).toFixed(2) })) };
+const report = { file: `${base}.mp4`, capture: info, adapter, tier: TIER, seed: SEED, crash: CRASH, gpu: GPU, menuAttempts: attempts, frameTimesMs: stats, reachedStage: lastEra, probe: JSON.parse(probe), loudness: summary.trim(), events: rec.events.map((e) => ({ ...e, t: +((e.wall - wallStart) / 1000).toFixed(2) })) };
 writeFileSync(`${base}.json`, JSON.stringify(report, null, 1));
 log('wrote', `${base}.mp4`, `${base}.sheet.png`, `${base}.json`);
 log('frame times per stage (ms):', JSON.stringify(stats));

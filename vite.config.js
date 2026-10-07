@@ -30,6 +30,20 @@ export default defineConfig({
       name: 'app-version',
       transformIndexHtml: (html) => html.replaceAll('%APP_VERSION%', version),
     },
+    {
+      // The fancy loading wheel (three.js) is what the page waits for: fetch its chunk with the HTML
+      // instead of after the game core has run.
+      name: 'preload-loading-wheel',
+      apply: 'build',
+      transformIndexHtml: {
+        order: 'post',
+        handler(html, ctx) {
+          const chunk = Object.values(ctx.bundle ?? {}).find((c) => c.type === 'chunk' && c.facadeModuleId?.endsWith('render3d/graphics3d.js'));
+          if (!chunk) return html;
+          return [chunk.fileName, ...chunk.imports].map((f) => ({ tag: 'link', attrs: { rel: 'modulepreload', href: `/${f}`, crossorigin: '' }, injectTo: 'head' }));
+        },
+      },
+    },
   ],
   server: { host: true },
   preview: { host: true },

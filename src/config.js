@@ -45,9 +45,28 @@ export const BREATHER = { before: 1.0, after: 2.0 };
 export const SCORE_PER_UNIT = 2;
 export const MILESTONE = 100;
 
-// ---- Title: the loading donut runs at least `minRun` s before Play shows (spec: interactive in
-// 2–3 s), and Play never waits past `cap` s. The 3D donut gets `min3D` s on screen first. ----
-export const WHEEL = { minRun: 2.5, cap: 3.0, min3D: 1.0 };
+// ---- Loading (seconds) ----
+// A: a flat Spiral pre-loader while the fancy wheel loads. B: the fancy wheel plays, which counts as
+// "page loading done" (spec: 2–3 s, 4 s at most), so B starts by `cap` at the latest (CSS fancy-lite
+// if the 3D wheel isn't warm yet). After `quiet` s of nothing but the wheel, each attempt (click,
+// tap, Space) may open the menu: chance = base + perMiss·misses + perSec·(s since open), certain on
+// attempt `sure`. Attempts closer than `debounce` count once. A hit also needs the menu to be loaded;
+// after `need3D` s of B it may come up without the 3D donut.
+export const LOADER = {
+  cap: 3.5,
+  quiet: 5,
+  debounce: 0.25,
+  odds: { base: 0.35, perMiss: 0.3, perSec: 0.08, sure: 3 },
+  need3D: 12,
+  handoff: 0.4, // A → B cross-fade
+  hitch: 0.15, // a missed attempt freezes the wheel this long, as if the page were busy
+  decay: 0.7, // a hit: everything spirals into the star
+  menuIn: 0.45, // then the donut springs out of the hub
+};
+
+// The fancy wheel's clocks, as in the reference components (loading-ui.com Spiral: 8 dots, 1.5 s;
+// Twin Orbit: 1 s per lap).
+export const ORBIT = { stations: 8, ringPeriod: 1.5, twinPeriod: 1.0 };
 
 // ---- View ----
 // Minimum visible world: width grows with aspect ratio (portrait 11 → wide 18), height 5.

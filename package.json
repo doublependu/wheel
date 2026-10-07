@@ -10,6 +10,7 @@
     "test": "vitest run",
     "deploy": "node tools/predeploy.mjs && npm run build && wrangler deploy",
     "record": "node tools/record/record.mjs",
+    "loadtime": "node tools/loadtime.mjs",
     "sprites": "node tools/build-obstacle-sprites.mjs"
   },
   "dependencies": {
